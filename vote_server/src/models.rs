@@ -9,14 +9,14 @@ pub struct Poll {
     pub name: String,
     pub uuid: Uuid,
     pub start_date: String,
-    pub close_date: String,
+    pub close_date: String
 }
 
 #[derive(Deserialize, FromForm)]
 #[serde(crate = "rocket::serde")]
 pub struct PollCreationDetails {
     pub name: String,
-    pub close_date: String,
+    pub close_date: String
 }
 
 #[derive(Insertable, Identifiable, Associations)]
@@ -33,10 +33,23 @@ pub struct Choice {
 #[serde(crate = "rocket::serde")]
 pub struct ChoiceCreationDetails {
     pub name: String,
-    pub poll_uuid: String,
+    pub poll_uuid: String
 }
 
+#[derive(Insertable, Identifiable, Associations)]
+#[belongs_to(Choice, foreign_key = "choice_uuid")]
+#[primary_key("uuid")]
+#[diesel(table_name = votes)]
 pub struct Vote {
+    pub uuid: Uuid,
     pub signature: String,
-    pub target_uuid: String,
+    pub choice_uuid: Uuid
+}
+
+
+#[derive(Deserialize, FromForm)]
+#[serde(crate = "rocket::serde")]
+pub struct VoteCreationDetails {
+    pub signature: String,
+    pub choice_uuid: String
 }

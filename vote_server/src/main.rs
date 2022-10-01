@@ -13,9 +13,10 @@ use diesel::prelude::*;
 use rocket::serde::json::Json;
 use uuid::Uuid;
 
-use crate::models::{Choice, ChoiceCreationDetails, Poll, PollCreationDetails};
+use crate::models::{Choice, ChoiceCreationDetails, Poll, PollCreationDetails, Vote, VoteCreationDetails};
 use crate::schema::choices::dsl::choices;
 use crate::schema::polls::dsl::polls;
+use crate::schema::votes::dsl::votes;
 
 pub mod schema;
 pub mod models;
@@ -49,6 +50,20 @@ async fn create_choice(choice_details: Json<ChoiceCreationDetails>) -> String {
     return output;
 }
 
+#[post("/vote", format = "json", data = "<vote_details>")]
+async fn cast_vote(vote_details: Json<VoteCreationDetails>) -> String {
+    let vote = Vote {
+        uuid: Uuid::new_v4(),
+        signature: vote_details.signature.clone(),
+        choice_uuid: vote_details.choice_uuid.parse().unwrap()
+    };
+
+    insert_into(votes).values(&vote).execute(&get_connection());
+
+    let output = format!("casting a vote with the signature {}, for choice {}", &vote.signature, &vote.choice_uuid);
+    return output;
+}
+
 fn get_connection() -> PgConnection {
     let database_url = env::var("DB_URL").unwrap();
     PgConnection::establish(&database_url)
@@ -58,5 +73,5 @@ fn get_connection() -> PgConnection {
 #[launch]
 fn rocket() -> _ {
     println!("rocket launched!");
-    rocket::build().mount("/", routes![create_poll, create_choice])
+    rocket::build().mount("/", routes![create_poll, create_choice, cast_vote])
 }
