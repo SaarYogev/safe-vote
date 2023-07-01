@@ -19,3 +19,5 @@ Chart.*
 values.yaml
 
 completions.sh
+*.http
+*.tgz

@@ -1,0 +1,19 @@
+###
+POST http://localhost:8001/poll
+Content-Type: application/json
+
+{
+  "name": "test",
+  "close_date": "01/04/2023"
+}
+
+###
+POST http://localhost:8001/choice
+Content-Type: application/json
+
+{
+  "name": "choice1",
+  "poll_uuid": ""
+}
+
+###
