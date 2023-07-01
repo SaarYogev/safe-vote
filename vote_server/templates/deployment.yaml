@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vote-server.fullname" . }}
+  labels:
+    {{- include "vote-server.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vote-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "vote-server.selectorLabels" . | nindent 8 }}
+    spec:
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecrets }}
+      serviceAccountName: {{ include "vote-server.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          env:
+            {{- $host := printf "%s-postgresql" .Release.Namespace }}
+            - name: DB_HOST
+              value: {{ .Release.Namespace }}-postgresql
+            {{ with .Values.postgresConnection }}
+            - name: DATABASE_USER
+              value: {{ .username }}
+            - name: DATABASE_PASSWORD
+              value: {{ .password }}
+            - name: DATABASE_HOSTNAME
+              value: {{ $host }}
+            - name: DATABASE_NAME
+              value: {{ .database }}
+            - name: DATABASE_URL
+              value: {{ printf "postgresql://%s:%s@%s:5432/%s" .username .password $host .database }}
+            {{ end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}/{{ .Values.image.name }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          startupProbe:
+            exec:
+              command:
+                {{ with .Values.postgresConnection }}
+                - /bin/sh
+                - -c
+                - echo "apt-get update && apt-get install curl -y && curl -sm 1 safe-vote-postgresql:5432 && DATABASE_URL={{ printf "postgres://%s:%s@%s/%s" .username .password .hostname .database }} diesel setup" > /startup-probe.sh
+                {{ end }}
+{{/*          livenessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: /*/}}
+{{/*              port: http*/}}
+{{/*          readinessProbe:*/}}
+{{/*            httpGet:*/}}
+{{/*              path: /*/}}
+{{/*              port: http*/}}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      initContainers:
+        - name: init-votes-db
+          image: "{{ .Values.image.repository }}/{{ .Values.image.initDbName }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+{{/*          command: ['sh', '-c', 'diesel setup --help']*/}}
+          command: ['sh', '-c', 'diesel setup --database-url "postgres://{{ .Values.postgresConnection.username }}:{{ .Values.postgresConnection.password }}@{{ .Values.postgresConnection.hostname }}:5432/{{ .Values.postgresql.auth.database }}"']
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
