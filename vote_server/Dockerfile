@@ -6,13 +6,14 @@ COPY . .
 RUN cargo install --path . --debug --locked
 
 
-FROM debian:bullseye-slim
+FROM debian:bullseye-slim as app
 LABEL org.opencontainers.image.source="https://github.com/SaarYogev/safe-vote"
 WORKDIR /app
 COPY --from=builder /usr/local/cargo/bin/vote_server /usr/local/bin/vote_server
 COPY --from=builder /app/Rocket.toml /app/Rocket.toml
 COPY --from=builder /usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
 EXPOSE 8001
+ENV RUST_BACKTRACE=1
 CMD ["vote_server", "--debug"]
 
 

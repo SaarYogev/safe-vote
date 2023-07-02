@@ -65,7 +65,7 @@ async fn cast_vote(vote_details: Json<VoteCreationDetails>) -> String {
 }
 
 fn get_connection() -> PgConnection {
-    let database_url = env::var("DB_URL").unwrap();
+    let database_url = env::var("DATABASE_URL").unwrap();
     PgConnection::establish(&database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
 }
