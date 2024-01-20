@@ -4,7 +4,7 @@ Content-Type: application/json
 
 {
   "name": "test",
-  "close_date": "01/04/2023"
+  "close_date": "01/04/2024"
 }
 
 ###
@@ -12,8 +12,19 @@ POST http://localhost:8001/choice
 Content-Type: application/json
 
 {
-  "name": "choice1",
-  "poll_uuid": ""
+  "name": "choice3",
+  "poll_uuid": "2a672fe5-0cf7-41bb-9d3f-52caa24283b3"
+}
+
+###
+
+###
+POST http://localhost:8001/vote
+Content-Type: application/json
+
+{
+  "signature": "signature2",
+  "choice_uuid": "6f7bab0f-dc9d-40fb-8ba0-93a7987523c0"
 }
 
 ###

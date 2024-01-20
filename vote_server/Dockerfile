@@ -1,4 +1,4 @@
-FROM rust:slim as builder
+FROM rust:slim-bookworm as builder
 WORKDIR /app
 
 RUN apt-get update -y && apt-get install libpq-dev -y
@@ -6,7 +6,7 @@ COPY . .
 RUN cargo install --path . --debug --locked
 
 
-FROM debian:bullseye-slim as app
+FROM debian:bookworm-slim as app
 LABEL org.opencontainers.image.source="https://github.com/SaarYogev/safe-vote"
 WORKDIR /app
 COPY --from=builder /usr/local/cargo/bin/vote_server /usr/local/bin/vote_server
@@ -17,7 +17,7 @@ ENV RUST_BACKTRACE=1
 CMD ["vote_server", "--debug"]
 
 
-FROM rust:slim as db-init
+FROM rust:slim-bookworm as db-init
 LABEL org.opencontainers.image.source="https://github.com/SaarYogev/safe-vote"
 WORKDIR /app
 
