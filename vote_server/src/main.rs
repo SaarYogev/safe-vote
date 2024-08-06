@@ -21,7 +21,7 @@ use crate::schema::votes::dsl::votes;
 pub mod schema;
 pub mod models;
 
-#[post("/poll", format = "json", data = "<poll_details>")]
+#[post("/polls", format = "json", data = "<poll_details>")]
 async fn create_poll(poll_details: Json<PollCreationDetails>) -> String {
     let poll = Poll {
         name: poll_details.name.clone(),
@@ -36,7 +36,7 @@ async fn create_poll(poll_details: Json<PollCreationDetails>) -> String {
     return output;
 }
 
-#[post("/choice", format = "json", data = "<choice_details>")]
+#[post("/choices", format = "json", data = "<choice_details>")]
 async fn create_choice(choice_details: Json<ChoiceCreationDetails>) -> String {
     let choice = Choice {
         name: choice_details.name.clone(),
@@ -53,7 +53,7 @@ async fn create_choice(choice_details: Json<ChoiceCreationDetails>) -> String {
 
 }
 
-#[post("/vote", format = "json", data = "<vote_details>")]
+#[post("/votes", format = "json", data = "<vote_details>")]
 async fn cast_vote(vote_details: Json<VoteCreationDetails>) -> String {
     let vote = Vote {
         uuid: Uuid::new_v4(),
