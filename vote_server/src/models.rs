@@ -2,7 +2,7 @@ use uuid::Uuid;
 use rocket::serde::Deserialize;
 use crate::schema::*;
 
-#[derive(Insertable, Identifiable)]
+#[derive(Insertable, Identifiable, Queryable)]
 #[primary_key(uuid)]
 #[diesel(table_name = polls)]
 pub struct Poll {
@@ -19,7 +19,7 @@ pub struct PollCreationDetails {
     pub close_date: String
 }
 
-#[derive(Insertable, Identifiable, Associations)]
+#[derive(Insertable, Identifiable, Associations, Queryable)]
 #[belongs_to(Poll, foreign_key = "poll_uuid")]
 #[primary_key("uuid")]
 #[diesel(table_name = choices)]
@@ -36,7 +36,7 @@ pub struct ChoiceCreationDetails {
     pub poll_uuid: String
 }
 
-#[derive(Insertable, Identifiable, Associations)]
+#[derive(Insertable, Identifiable, Associations, Queryable)]
 #[belongs_to(Choice, foreign_key = "choice_uuid")]
 #[primary_key("uuid")]
 #[diesel(table_name = votes)]
