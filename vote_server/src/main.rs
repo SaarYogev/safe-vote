@@ -30,7 +30,8 @@ async fn create_poll(poll_details: Json<PollCreationDetails>) -> String {
         close_date: poll_details.close_date.to_string(),
     };
 
-    insert_into(polls).values(&poll).execute(&get_connection());
+    let mut conn = get_connection();
+    insert_into(polls).values(&poll).execute(&mut conn).unwrap();
 
     let output = format!("Creating a poll named {}, closing at {}", &poll.name, &poll.close_date);
     return output;
@@ -44,7 +45,8 @@ async fn create_choice(choice_details: Json<ChoiceCreationDetails>) -> String {
         poll_uuid: choice_details.poll_uuid.parse().unwrap(),
     };
 
-    let choice_query_result = insert_into(choices).values(&choice).execute(&get_connection());
+    let mut conn = get_connection();
+    let choice_query_result = insert_into(choices).values(&choice).execute(&mut conn);
 
     match choice_query_result {
         Ok(_) => { return format!("Creating a choice named {}, for poll {}", &choice.name, &choice.poll_uuid); }
@@ -61,7 +63,8 @@ async fn cast_vote(vote_details: Json<VoteCreationDetails>) -> String {
         choice_uuid: vote_details.choice_uuid.parse().unwrap(),
     };
 
-    let vote_query_result = insert_into(votes).values(&vote).execute(&get_connection());
+    let mut conn = get_connection();
+    let vote_query_result = insert_into(votes).values(&vote).execute(&mut conn);
 
     match vote_query_result {
         Ok(_) => { return format!("Casting a vote with the signature {}, for choice {}", &vote.signature, &vote.choice_uuid); }
@@ -74,6 +77,7 @@ fn get_connection() -> PgConnection {
     PgConnection::establish(&database_url)
         .unwrap_or_else(|_| panic!("Error connecting to {}", database_url))
 }
+
 
 #[launch]
 fn rocket() -> _ {
