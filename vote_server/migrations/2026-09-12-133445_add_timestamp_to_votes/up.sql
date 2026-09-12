@@ -1,1 +1,0 @@
-ALTER TABLE votes ADD COLUMN timestamp VARCHAR(200) NOT NULL DEFAULT (NOW()::text);

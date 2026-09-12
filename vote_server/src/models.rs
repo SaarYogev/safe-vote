@@ -1,12 +1,26 @@
-use uuid::Uuid;
+use std::collections::HashMap;
+use chrono::NaiveDateTime;
+use diesel::prelude::*;
 use rocket::serde::{Deserialize, Serialize};
+use uuid::Uuid;
 use crate::schema::*;
 
-#[derive(Insertable, Identifiable, Queryable, Selectable, Serialize)]
+#[derive(Insertable, Identifiable, Queryable, AsChangeset, Selectable, Serialize, Deserialize, Debug, Clone)]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = polls)]
 #[serde(crate = "rocket::serde")]
 pub struct Poll {
+    pub uuid: Uuid,
+    pub name: String,
+    pub start_date: String,
+    pub close_date: String,
+    pub status: String,
+    pub winning_choice: Option<Uuid>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = polls)]
+pub struct NewPoll {
     pub uuid: Uuid,
     pub name: String,
     pub start_date: String,
@@ -21,12 +35,21 @@ pub struct PollCreationDetails {
     pub choices: Option<Vec<String>>,
 }
 
-#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize)]
+#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize, Deserialize, Debug, Clone)]
 #[diesel(belongs_to(Poll, foreign_key = poll_uuid))]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = choices)]
 #[serde(crate = "rocket::serde")]
 pub struct Choice {
+    pub uuid: Uuid,
+    pub name: String,
+    pub poll_uuid: Uuid,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = choices)]
+pub struct NewChoice {
     pub uuid: Uuid,
     pub name: String,
     pub poll_uuid: Uuid,
@@ -39,7 +62,7 @@ pub struct ChoiceCreationDetails {
     pub poll_uuid: String,
 }
 
-#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize)]
+#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize, Deserialize, Debug, Clone)]
 #[diesel(belongs_to(Choice, foreign_key = choice_uuid))]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = votes)]
@@ -48,7 +71,15 @@ pub struct Vote {
     pub uuid: Uuid,
     pub signature: String,
     pub choice_uuid: Uuid,
-    pub timestamp: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = votes)]
+pub struct NewVote {
+    pub uuid: Uuid,
+    pub signature: String,
+    pub choice_uuid: Uuid,
 }
 
 #[derive(Deserialize, FromForm)]
@@ -58,17 +89,18 @@ pub struct VoteCreationDetails {
     pub choice_uuid: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(crate = "rocket::serde")]
 pub struct PollDetailsResponse {
     pub uuid: Uuid,
     pub name: String,
     pub start_date: String,
     pub close_date: String,
+    pub status: String,
     pub choices: Vec<ChoiceResponse>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(crate = "rocket::serde")]
 pub struct ChoiceResponse {
     pub uuid: Uuid,
@@ -76,7 +108,7 @@ pub struct ChoiceResponse {
     pub poll_uuid: Uuid,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(crate = "rocket::serde")]
 pub struct VoteResponse {
     pub uuid: Uuid,
@@ -84,4 +116,12 @@ pub struct VoteResponse {
     pub choice_uuid: Uuid,
     pub poll_uuid: Uuid,
     pub timestamp: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+pub struct PollResultsResponse {
+    pub status: String,
+    pub winning_choice: Option<Uuid>,
+    pub vote_distribution: HashMap<Uuid, i64>,
 }
