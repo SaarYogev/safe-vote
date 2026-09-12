@@ -3,7 +3,7 @@ use rocket::serde::Deserialize;
 use crate::schema::*;
 
 #[derive(Insertable, Identifiable)]
-#[primary_key(uuid)]
+#[diesel(primary_key(uuid))]
 #[diesel(table_name = polls)]
 pub struct Poll {
     pub name: String,
@@ -20,8 +20,8 @@ pub struct PollCreationDetails {
 }
 
 #[derive(Insertable, Identifiable, Associations)]
-#[belongs_to(Poll, foreign_key = "poll_uuid")]
-#[primary_key("uuid")]
+#[diesel(belongs_to(Poll, foreign_key = poll_uuid))]
+#[diesel(primary_key(uuid))]
 #[diesel(table_name = choices)]
 pub struct Choice {
     pub name: String,
@@ -37,14 +37,15 @@ pub struct ChoiceCreationDetails {
 }
 
 #[derive(Insertable, Identifiable, Associations)]
-#[belongs_to(Choice, foreign_key = "choice_uuid")]
-#[primary_key("uuid")]
+#[diesel(belongs_to(Choice, foreign_key = choice_uuid))]
+#[diesel(primary_key(uuid))]
 #[diesel(table_name = votes)]
 pub struct Vote {
     pub uuid: Uuid,
     pub signature: String,
     pub choice_uuid: Uuid
 }
+
 
 
 #[derive(Deserialize, FromForm)]
