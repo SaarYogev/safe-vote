@@ -274,35 +274,6 @@ pub async fn get_poll(poll_id: &str) -> Result<Json<crate::models::PollDetailsRe
     }))
 }
 
-#[get("/polls/<poll_id>/choices")]
-pub async fn get_poll_choices(poll_id: &str) -> Result<Json<Vec<crate::models::ChoiceResponse>>, Status> {
-    let parsed_poll_uuid = Uuid::parse_str(poll_id).map_err(|_| Status::BadRequest)?;
-    let mut conn = get_connection();
-
-    let _poll_exists = polls
-        .filter(crate::schema::polls::uuid.eq(parsed_poll_uuid))
-        .first::<Poll>(&mut conn)
-        .optional()
-        .map_err(|_| Status::InternalServerError)?
-        .ok_or(Status::NotFound)?;
-
-    let poll_choices = choices
-        .filter(crate::schema::choices::poll_uuid.eq(parsed_poll_uuid))
-        .load::<Choice>(&mut conn)
-        .map_err(|_| Status::InternalServerError)?;
-
-    let choice_responses = poll_choices
-        .into_iter()
-        .map(|c| crate::models::ChoiceResponse {
-            uuid: c.uuid,
-            name: c.name,
-            poll_uuid: c.poll_uuid,
-        })
-        .collect();
-
-    Ok(Json(choice_responses))
-}
-
 #[get("/polls/<poll_id>/votes/<voter_signature>")]
 pub async fn get_poll_user_vote(
     poll_id: &str,
@@ -354,7 +325,6 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
             get_poll,
             create_choice,
             create_choice_plural,
-            get_poll_choices,
             cast_vote,
             cast_vote_plural,
             count_votes,

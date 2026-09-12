@@ -209,35 +209,30 @@ fn test_create_poll_and_get_details() {
 }
 
 #[test]
-fn test_get_poll_choices() {
+fn test_embedded_choices_in_poll() {
     let client = Client::tracked(rocket_app()).expect("valid rocket instance");
-    let poll_uuid = Uuid::new_v4();
+    let poll_res = client
+        .post("/polls")
+        .header(ContentType::JSON)
+        .body(r#"{"name":"Embedded Choices Poll","close_date":"2099-12-31","choices":["Option 1","Option 2"]}"#)
+        .dispatch();
+    assert_eq!(poll_res.status(), Status::Ok);
+
     let mut conn = get_connection();
-    insert_into(polls)
-        .values(&NewPoll {
-            uuid: poll_uuid,
-            name: "Poll With Choices".to_string(),
-            start_date: Utc::now().to_string(),
-            close_date: "2099-12-31".to_string(),
-        })
-        .execute(&mut conn)
+    let poll: Poll = polls
+        .filter(vote_server::schema::polls::name.eq("Embedded Choices Poll"))
+        .first::<Poll>(&mut conn)
         .unwrap();
 
-    let choice_res = client
-        .post("/choice")
-        .header(ContentType::JSON)
-        .body(format!(r#"{{"name":"Option A","poll_uuid":"{}"}}"#, poll_uuid))
+    let get_res = client
+        .get(format!("/polls/{}", poll.uuid))
         .dispatch();
-    assert_eq!(choice_res.status(), Status::Ok);
-
-    let get_choices_res = client
-        .get(format!("/polls/{}/choices", poll_uuid))
-        .dispatch();
-    assert_eq!(get_choices_res.status(), Status::Ok);
-    let choices_list: Vec<vote_server::models::ChoiceResponse> =
-        get_choices_res.into_json().expect("valid choices list");
-    assert_eq!(choices_list.len(), 1);
-    assert_eq!(choices_list[0].name, "Option A");
+    assert_eq!(get_res.status(), Status::Ok);
+    let poll_details: vote_server::models::PollDetailsResponse =
+        get_res.into_json().expect("valid json response");
+    assert_eq!(poll_details.choices.len(), 2);
+    assert_eq!(poll_details.choices[0].name, "Option 1");
+    assert_eq!(poll_details.choices[1].name, "Option 2");
 }
 
 #[test]
