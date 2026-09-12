@@ -1,3 +1,32 @@
+### Create a poll with atomic choices
+POST http://localhost:8001/polls
+Content-Type: application/json
+
+{
+  "name": "Community Leader Election",
+  "close_date": "2026-12-31T23:59:59Z",
+  "choices": ["Alice", "Bob", "Carol"]
+}
+
+### Get poll details and choices
+GET http://localhost:8001/polls/{{poll_id}}
+
+### Cast a vote in a poll
+POST http://localhost:8001/polls/{{poll_id}}/votes
+Content-Type: application/json
+
+{
+  "signature": "sig_voter_1",
+  "choice_uuid": "{{choice_id}}"
+}
+
+### Get user's current (latest) vote for a poll
+GET http://localhost:8001/polls/{{poll_id}}/votes/sig_voter_1
+
+###
+### Legacy endpoints
+###
+
 ###
 POST http://localhost:8001/poll
 Content-Type: application/json
@@ -17,8 +46,6 @@ Content-Type: application/json
 }
 
 ###
-
-###
 POST http://localhost:8001/vote
 Content-Type: application/json
 
@@ -26,5 +53,3 @@ Content-Type: application/json
   "signature": "signature2",
   "choice_uuid": "6f7bab0f-dc9d-40fb-8ba0-93a7987523c0"
 }
-
-###

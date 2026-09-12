@@ -71,6 +71,17 @@ async fn create_poll_handler(poll_details: Json<PollCreationDetails>) -> String 
     let mut conn = get_connection();
     insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
 
+    if let Some(choice_names) = &poll_details.choices {
+        for choice_name in choice_names {
+            let choice = NewChoice {
+                uuid: Uuid::new_v4(),
+                name: choice_name.clone(),
+                poll_uuid: new_poll.uuid,
+            };
+            insert_into(choices).values(&choice).execute(&mut conn).unwrap();
+        }
+    }
+
     format!("Creating a poll named {}, closing at {}", &new_poll.name, &new_poll.close_date)
 }
 
@@ -221,6 +232,84 @@ pub async fn count_votes(poll_id: String) -> Result<Json<PollResultsResponse>, C
     }))
 }
 
+#[get("/polls/<poll_id>")]
+pub async fn get_poll(poll_id: &str) -> Result<Json<crate::models::PollDetailsResponse>, Status> {
+    let parsed_poll_uuid = Uuid::parse_str(poll_id).map_err(|_| Status::BadRequest)?;
+    let mut conn = get_connection();
+
+    let found_poll = polls
+        .filter(crate::schema::polls::uuid.eq(parsed_poll_uuid))
+        .first::<Poll>(&mut conn)
+        .optional()
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+
+    let poll_choices = choices
+        .filter(crate::schema::choices::poll_uuid.eq(parsed_poll_uuid))
+        .load::<Choice>(&mut conn)
+        .map_err(|_| Status::InternalServerError)?;
+
+    let choice_responses = poll_choices
+        .into_iter()
+        .map(|c| crate::models::ChoiceResponse {
+            uuid: c.uuid,
+            name: c.name,
+            poll_uuid: c.poll_uuid,
+        })
+        .collect();
+
+    let current_status = if is_poll_closed(&found_poll) {
+        "closed".to_string()
+    } else {
+        found_poll.status
+    };
+
+    Ok(Json(crate::models::PollDetailsResponse {
+        uuid: found_poll.uuid,
+        name: found_poll.name,
+        start_date: found_poll.start_date,
+        close_date: found_poll.close_date,
+        status: current_status,
+        choices: choice_responses,
+    }))
+}
+
+#[get("/polls/<poll_id>/votes/<voter_signature>")]
+pub async fn get_poll_user_vote(
+    poll_id: &str,
+    voter_signature: &str,
+) -> Result<Json<crate::models::VoteResponse>, Status> {
+    let parsed_poll_uuid = Uuid::parse_str(poll_id).map_err(|_| Status::BadRequest)?;
+    let mut conn = get_connection();
+
+    let _poll_exists = polls
+        .filter(crate::schema::polls::uuid.eq(parsed_poll_uuid))
+        .first::<Poll>(&mut conn)
+        .optional()
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+
+    // Join votes with choices to bound query to this poll and resolve the voter's latest ballot revision
+    let latest_vote = votes
+        .inner_join(choices)
+        .filter(crate::schema::choices::poll_uuid.eq(parsed_poll_uuid))
+        .filter(crate::schema::votes::signature.eq(voter_signature))
+        .order_by(crate::schema::votes::created_at.desc())
+        .select(votes::all_columns())
+        .first::<Vote>(&mut conn)
+        .optional()
+        .map_err(|_| Status::InternalServerError)?
+        .ok_or(Status::NotFound)?;
+
+    Ok(Json(crate::models::VoteResponse {
+        uuid: latest_vote.uuid,
+        signature: latest_vote.signature,
+        choice_uuid: latest_vote.choice_uuid,
+        poll_uuid: parsed_poll_uuid,
+        timestamp: latest_vote.created_at.to_string(),
+    }))
+}
+
 pub fn get_connection() -> PgConnection {
     let database_url = env::var("DATABASE_URL").unwrap();
     PgConnection::establish(&database_url)
@@ -233,11 +322,13 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
         routes![
             create_poll,
             create_poll_plural,
+            get_poll,
             create_choice,
             create_choice_plural,
             cast_vote,
             cast_vote_plural,
             count_votes,
+            get_poll_user_vote,
         ],
     )
 }

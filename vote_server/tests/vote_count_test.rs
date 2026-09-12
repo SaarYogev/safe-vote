@@ -180,3 +180,143 @@ fn test_count_votes_invalid_uuid() {
     let res = client.get("/polls/invalid-uuid-string/votes").dispatch();
     assert_eq!(res.status(), Status::BadRequest);
 }
+
+#[test]
+fn test_create_poll_and_get_details() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let response = client
+        .post("/polls")
+        .header(ContentType::JSON)
+        .body(r#"{"name":"Test Election","close_date":"2026-12-31T00:00:00Z","choices":["Alice","Bob"]}"#)
+        .dispatch();
+
+    assert_eq!(response.status(), Status::Ok);
+
+    let mut conn = get_connection();
+    let poll: Poll = polls
+        .filter(vote_server::schema::polls::name.eq("Test Election"))
+        .first::<Poll>(&mut conn)
+        .unwrap();
+
+    let get_response = client
+        .get(format!("/polls/{}", poll.uuid))
+        .dispatch();
+    assert_eq!(get_response.status(), Status::Ok);
+    let fetched_poll: vote_server::models::PollDetailsResponse =
+        get_response.into_json().expect("valid json response");
+    assert_eq!(fetched_poll.uuid, poll.uuid);
+    assert_eq!(fetched_poll.choices.len(), 2);
+}
+
+#[test]
+fn test_embedded_choices_in_poll() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let poll_res = client
+        .post("/polls")
+        .header(ContentType::JSON)
+        .body(r#"{"name":"Embedded Choices Poll","close_date":"2099-12-31","choices":["Option 1","Option 2"]}"#)
+        .dispatch();
+    assert_eq!(poll_res.status(), Status::Ok);
+
+    let mut conn = get_connection();
+    let poll: Poll = polls
+        .filter(vote_server::schema::polls::name.eq("Embedded Choices Poll"))
+        .first::<Poll>(&mut conn)
+        .unwrap();
+
+    let get_res = client
+        .get(format!("/polls/{}", poll.uuid))
+        .dispatch();
+    assert_eq!(get_res.status(), Status::Ok);
+    let poll_details: vote_server::models::PollDetailsResponse =
+        get_res.into_json().expect("valid json response");
+    assert_eq!(poll_details.choices.len(), 2);
+    assert_eq!(poll_details.choices[0].name, "Option 1");
+    assert_eq!(poll_details.choices[1].name, "Option 2");
+}
+
+#[test]
+fn test_get_latest_user_vote_for_poll() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let poll_uuid = Uuid::new_v4();
+    let mut conn = get_connection();
+
+    insert_into(polls)
+        .values(&NewPoll {
+            uuid: poll_uuid,
+            name: "Candidate Race".to_string(),
+            start_date: Utc::now().to_string(),
+            close_date: "2099-12-31".to_string(),
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let choice_1 = Uuid::new_v4();
+    let choice_2 = Uuid::new_v4();
+    insert_into(choices)
+        .values(&vec![
+            NewChoice {
+                uuid: choice_1,
+                name: "Candidate 1".to_string(),
+                poll_uuid,
+            },
+            NewChoice {
+                uuid: choice_2,
+                name: "Candidate 2".to_string(),
+                poll_uuid,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    let voter_sig = format!("voter_{}", Uuid::new_v4());
+
+    // Vote for Choice 1
+    let vote_1_res = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(format!(r#"{{"signature":"{}","choice_uuid":"{}"}}"#, voter_sig, choice_1))
+        .dispatch();
+    assert_eq!(vote_1_res.status(), Status::Ok);
+
+    // Initial check: voter's vote is Choice 1
+    let query_1 = client
+        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_sig))
+        .dispatch();
+    assert_eq!(query_1.status(), Status::Ok);
+    let vote_data_1: vote_server::models::VoteResponse =
+        query_1.into_json().expect("valid json response");
+    assert_eq!(vote_data_1.choice_uuid, choice_1);
+    assert_eq!(vote_data_1.signature, voter_sig);
+    assert!(!vote_data_1.timestamp.is_empty());
+
+    std::thread::sleep(std::time::Duration::from_millis(15));
+
+    // Re-vote for Choice 2
+    let vote_2_res = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(format!(r#"{{"signature":"{}","choice_uuid":"{}"}}"#, voter_sig, choice_2))
+        .dispatch();
+    assert_eq!(vote_2_res.status(), Status::Ok);
+
+    // Latest vote should now be Choice 2
+    let query_2 = client
+        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_sig))
+        .dispatch();
+    assert_eq!(query_2.status(), Status::Ok);
+    let vote_data_2: vote_server::models::VoteResponse =
+        query_2.into_json().expect("valid json response");
+    assert_eq!(vote_data_2.choice_uuid, choice_2);
+    assert_eq!(vote_data_2.signature, voter_sig);
+}
+
+#[test]
+fn test_get_user_vote_not_found() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let random_poll = Uuid::new_v4();
+    let res = client
+        .get(format!("/polls/{}/votes/unknown_signature", random_poll))
+        .dispatch();
+    assert_eq!(res.status(), Status::NotFound);
+}
