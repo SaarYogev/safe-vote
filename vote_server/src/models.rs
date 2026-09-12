@@ -1,56 +1,87 @@
 use uuid::Uuid;
-use rocket::serde::Deserialize;
+use rocket::serde::{Deserialize, Serialize};
 use crate::schema::*;
 
-#[derive(Insertable, Identifiable)]
+#[derive(Insertable, Identifiable, Queryable, Selectable, Serialize)]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = polls)]
+#[serde(crate = "rocket::serde")]
 pub struct Poll {
-    pub name: String,
     pub uuid: Uuid,
+    pub name: String,
     pub start_date: String,
-    pub close_date: String
+    pub close_date: String,
 }
 
 #[derive(Deserialize, FromForm)]
 #[serde(crate = "rocket::serde")]
 pub struct PollCreationDetails {
     pub name: String,
-    pub close_date: String
+    pub close_date: String,
+    pub choices: Option<Vec<String>>,
 }
 
-#[derive(Insertable, Identifiable, Associations)]
+#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize)]
 #[diesel(belongs_to(Poll, foreign_key = poll_uuid))]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = choices)]
+#[serde(crate = "rocket::serde")]
 pub struct Choice {
-    pub name: String,
     pub uuid: Uuid,
-    pub poll_uuid: Uuid
+    pub name: String,
+    pub poll_uuid: Uuid,
 }
 
 #[derive(Deserialize, FromForm)]
 #[serde(crate = "rocket::serde")]
 pub struct ChoiceCreationDetails {
     pub name: String,
-    pub poll_uuid: String
+    pub poll_uuid: String,
 }
 
-#[derive(Insertable, Identifiable, Associations)]
+#[derive(Insertable, Identifiable, Associations, Queryable, Selectable, Serialize)]
 #[diesel(belongs_to(Choice, foreign_key = choice_uuid))]
 #[diesel(primary_key(uuid))]
 #[diesel(table_name = votes)]
+#[serde(crate = "rocket::serde")]
 pub struct Vote {
     pub uuid: Uuid,
     pub signature: String,
-    pub choice_uuid: Uuid
+    pub choice_uuid: Uuid,
+    pub timestamp: String,
 }
-
-
 
 #[derive(Deserialize, FromForm)]
 #[serde(crate = "rocket::serde")]
 pub struct VoteCreationDetails {
     pub signature: String,
-    pub choice_uuid: String
+    pub choice_uuid: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct PollDetailsResponse {
+    pub uuid: Uuid,
+    pub name: String,
+    pub start_date: String,
+    pub close_date: String,
+    pub choices: Vec<ChoiceResponse>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct ChoiceResponse {
+    pub uuid: Uuid,
+    pub name: String,
+    pub poll_uuid: Uuid,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct VoteResponse {
+    pub uuid: Uuid,
+    pub signature: String,
+    pub choice_uuid: Uuid,
+    pub poll_uuid: Uuid,
+    pub timestamp: String,
 }
