@@ -118,10 +118,28 @@ pub struct VoteResponse {
     pub timestamp: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(crate = "rocket::serde")]
 pub struct PollResultsResponse {
     pub status: String,
     pub winning_choice: Option<Uuid>,
     pub vote_distribution: HashMap<Uuid, i64>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(crate = "rocket::serde")]
+pub struct VoteHistoryItem {
+    pub uuid: Uuid,
+    pub signature: String,
+    pub choice_uuid: Uuid,
+    pub poll_uuid: Uuid,
+    pub timestamp: String,
+    pub poll_status: String,
+    pub is_winning_choice: Option<bool>,
+}
+
+#[derive(FromForm, Debug, Default)]
+pub struct VoteHistoryQuery {
+    pub poll_id: Vec<String>,
+}
+

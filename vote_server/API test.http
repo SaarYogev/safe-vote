@@ -23,6 +23,13 @@ Content-Type: application/json
 ### Get user's current (latest) vote for a poll
 GET http://localhost:8001/polls/{{poll_id}}/votes/sig_voter_1
 
+### Get user's entire vote history
+GET http://localhost:8001/votes/sig_voter_1
+
+### Get user's vote history filtered by poll
+GET http://localhost:8001/votes/sig_voter_1?poll_id={{poll_id}}
+
+
 ###
 ### Legacy endpoints
 ###

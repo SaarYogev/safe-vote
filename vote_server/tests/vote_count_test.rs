@@ -6,7 +6,7 @@ use rocket::local::blocking::Client;
 use rocket::serde::json::serde_json;
 use uuid::Uuid;
 use vote_server::get_connection;
-use vote_server::models::{NewChoice, NewPoll, NewVote, Poll, PollResultsResponse};
+use vote_server::models::{NewChoice, NewPoll, NewVote, Poll, PollResultsResponse, VoteHistoryItem};
 use vote_server::rocket_app;
 use vote_server::schema::choices::dsl::choices;
 use vote_server::schema::polls::dsl::polls;
@@ -320,3 +320,270 @@ fn test_get_user_vote_not_found() {
         .dispatch();
     assert_eq!(res.status(), Status::NotFound);
 }
+
+#[test]
+fn test_get_user_vote_history_empty() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let voter_sig = format!("history_voter_{}", Uuid::new_v4());
+    let res = client
+        .get(format!("/votes/{}", voter_sig))
+        .dispatch();
+    assert_eq!(res.status(), Status::Ok);
+    let history: Vec<VoteHistoryItem> = res.into_json().expect("valid json list");
+    assert!(history.is_empty());
+}
+
+#[test]
+fn test_get_user_vote_history_open_and_closed_polls() {
+    let mut conn = get_connection();
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let voter_sig = format!("voter_{}", Uuid::new_v4());
+
+    let open_poll_uuid = Uuid::new_v4();
+    insert_into(polls)
+        .values(&NewPoll {
+            uuid: open_poll_uuid,
+            name: "Open Poll".to_string(),
+            start_date: Utc::now().to_string(),
+            close_date: "2099-12-31".to_string(),
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let open_choice_1 = Uuid::new_v4();
+    let open_choice_2 = Uuid::new_v4();
+    insert_into(choices)
+        .values(&vec![
+            NewChoice {
+                uuid: open_choice_1,
+                name: "Open Choice 1".to_string(),
+                poll_uuid: open_poll_uuid,
+            },
+            NewChoice {
+                uuid: open_choice_2,
+                name: "Open Choice 2".to_string(),
+                poll_uuid: open_poll_uuid,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    let closed_poll_uuid = Uuid::new_v4();
+    insert_into(polls)
+        .values(&NewPoll {
+            uuid: closed_poll_uuid,
+            name: "Closed Poll".to_string(),
+            start_date: "2020-01-01".to_string(),
+            close_date: "2020-01-02".to_string(),
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let closed_winning_choice = Uuid::new_v4();
+    let closed_losing_choice = Uuid::new_v4();
+    insert_into(choices)
+        .values(&vec![
+            NewChoice {
+                uuid: closed_winning_choice,
+                name: "Closed Choice Winner".to_string(),
+                poll_uuid: closed_poll_uuid,
+            },
+            NewChoice {
+                uuid: closed_losing_choice,
+                name: "Closed Choice Loser".to_string(),
+                poll_uuid: closed_poll_uuid,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    insert_into(votes)
+        .values(&vec![
+            NewVote {
+                uuid: Uuid::new_v4(),
+                signature: voter_sig.clone(),
+                choice_uuid: closed_winning_choice,
+            },
+            NewVote {
+                uuid: Uuid::new_v4(),
+                signature: format!("other_voter_{}", Uuid::new_v4()),
+                choice_uuid: closed_winning_choice,
+            },
+            NewVote {
+                uuid: Uuid::new_v4(),
+                signature: format!("third_voter_{}", Uuid::new_v4()),
+                choice_uuid: closed_losing_choice,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    insert_into(votes)
+        .values(&NewVote {
+            uuid: Uuid::new_v4(),
+            signature: voter_sig.clone(),
+            choice_uuid: open_choice_1,
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let history_res = client.get(format!("/votes/{}", voter_sig)).dispatch();
+    assert_eq!(history_res.status(), Status::Ok);
+    let items: Vec<VoteHistoryItem> = history_res.into_json().expect("valid json list");
+    assert_eq!(items.len(), 2);
+
+    let open_item = items.iter().find(|i| i.poll_uuid == open_poll_uuid).expect("open poll item found");
+    assert_eq!(open_item.poll_status, "open");
+    assert_eq!(open_item.is_winning_choice, None);
+    assert_eq!(open_item.choice_uuid, open_choice_1);
+
+    let closed_item = items.iter().find(|i| i.poll_uuid == closed_poll_uuid).expect("closed poll item found");
+    assert_eq!(closed_item.poll_status, "closed");
+    assert_eq!(closed_item.is_winning_choice, Some(true));
+    assert_eq!(closed_item.choice_uuid, closed_winning_choice);
+}
+
+#[test]
+fn test_get_user_vote_history_filter_by_polls() {
+    let mut conn = get_connection();
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let voter_sig = format!("filter_voter_{}", Uuid::new_v4());
+
+    let poll_1 = Uuid::new_v4();
+    let poll_2 = Uuid::new_v4();
+    let poll_3 = Uuid::new_v4();
+
+    for (p_id, p_name) in &[(poll_1, "Poll 1"), (poll_2, "Poll 2"), (poll_3, "Poll 3")] {
+        insert_into(polls)
+            .values(&NewPoll {
+                uuid: *p_id,
+                name: p_name.to_string(),
+                start_date: Utc::now().to_string(),
+                close_date: "2099-12-31".to_string(),
+            })
+            .execute(&mut conn)
+            .unwrap();
+
+        let ch = Uuid::new_v4();
+        insert_into(choices)
+            .values(&NewChoice {
+                uuid: ch,
+                name: format!("Choice for {}", p_name),
+                poll_uuid: *p_id,
+            })
+            .execute(&mut conn)
+            .unwrap();
+
+        insert_into(votes)
+            .values(&NewVote {
+                uuid: Uuid::new_v4(),
+                signature: voter_sig.clone(),
+                choice_uuid: ch,
+            })
+            .execute(&mut conn)
+            .unwrap();
+    }
+
+    let res_single = client
+        .get(format!("/votes/{}?poll_id={}", voter_sig, poll_1))
+        .dispatch();
+    assert_eq!(res_single.status(), Status::Ok);
+    let items_single: Vec<VoteHistoryItem> = res_single.into_json().expect("valid json list");
+    assert_eq!(items_single.len(), 1);
+    assert_eq!(items_single[0].poll_uuid, poll_1);
+
+    let res_multi = client
+        .get(format!("/votes/{}?poll_id={}&poll_id={}", voter_sig, poll_1, poll_2))
+        .dispatch();
+    assert_eq!(res_multi.status(), Status::Ok);
+    let items_multi: Vec<VoteHistoryItem> = res_multi.into_json().expect("valid json list");
+    assert_eq!(items_multi.len(), 2);
+    let poll_uuids: Vec<Uuid> = items_multi.iter().map(|i| i.poll_uuid).collect();
+    assert!(poll_uuids.contains(&poll_1));
+    assert!(poll_uuids.contains(&poll_2));
+    assert!(!poll_uuids.contains(&poll_3));
+
+    let res_invalid = client
+        .get(format!("/votes/{}?poll_id=invalid-uuid", voter_sig))
+        .dispatch();
+    assert_eq!(res_invalid.status(), Status::BadRequest);
+}
+
+#[test]
+fn test_get_user_vote_history_closed_poll_losing_choice() {
+    let mut conn = get_connection();
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let voter_sig = format!("loser_voter_{}", Uuid::new_v4());
+
+    let closed_poll_uuid = Uuid::new_v4();
+    insert_into(polls)
+        .values(&NewPoll {
+            uuid: closed_poll_uuid,
+            name: "Closed Election".to_string(),
+            start_date: "2020-01-01".to_string(),
+            close_date: "2020-01-02".to_string(),
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let winning_choice = Uuid::new_v4();
+    let losing_choice = Uuid::new_v4();
+    insert_into(choices)
+        .values(&vec![
+            NewChoice {
+                uuid: winning_choice,
+                name: "Winner Choice".to_string(),
+                poll_uuid: closed_poll_uuid,
+            },
+            NewChoice {
+                uuid: losing_choice,
+                name: "Loser Choice".to_string(),
+                poll_uuid: closed_poll_uuid,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    insert_into(votes)
+        .values(&NewVote {
+            uuid: Uuid::new_v4(),
+            signature: voter_sig.clone(),
+            choice_uuid: losing_choice,
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    insert_into(votes)
+        .values(&NewVote {
+            uuid: Uuid::new_v4(),
+            signature: format!("another_{}", Uuid::new_v4()),
+            choice_uuid: winning_choice,
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    insert_into(votes)
+        .values(&NewVote {
+            uuid: Uuid::new_v4(),
+            signature: format!("third_{}", Uuid::new_v4()),
+            choice_uuid: winning_choice,
+        })
+        .execute(&mut conn)
+        .unwrap();
+
+    let res = client.get(format!("/votes/{}", voter_sig)).dispatch();
+    assert_eq!(res.status(), Status::Ok);
+    let items: Vec<VoteHistoryItem> = res.into_json().expect("valid json list");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].poll_status, "closed");
+    assert_eq!(items[0].choice_uuid, losing_choice);
+    assert_eq!(items[0].is_winning_choice, Some(false));
+}
+
+
+
