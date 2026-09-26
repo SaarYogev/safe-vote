@@ -14,7 +14,10 @@ use rocket::response::status::Custom;
 use rocket::serde::json::Json;
 use uuid::Uuid;
 
-use crate::models::{Choice, ChoiceCreationDetails, NewChoice, NewPoll, NewVote, Poll, PollCreationDetails, PollResultsResponse, Vote, VoteCreationDetails};
+use crate::models::{
+    Choice, ChoiceCreationDetails, NewChoice, NewPoll, NewVote, Poll, PollCreationDetails,
+    PollResultsResponse, Vote, VoteCreationDetails, VoteHistoryItem, VoteHistoryQuery,
+};
 use crate::schema::choices::dsl::choices;
 use crate::schema::polls::dsl::polls;
 use crate::schema::votes::dsl::votes;
@@ -169,6 +172,51 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
     }
 }
 
+pub fn compute_poll_results(
+    poll: &Poll,
+    conn: &mut PgConnection,
+) -> Result<PollResultsResponse, diesel::result::Error> {
+    let poll_choices: Vec<Choice> = choices
+        .filter(crate::schema::choices::poll_uuid.eq(poll.uuid))
+        .load::<Choice>(conn)?;
+
+    let poll_votes: Vec<Vote> = votes
+        .inner_join(choices)
+        .filter(crate::schema::choices::poll_uuid.eq(poll.uuid))
+        .select(votes::all_columns())
+        .order_by((crate::schema::votes::signature.asc(), crate::schema::votes::created_at.desc()))
+        .load::<Vote>(conn)?;
+
+    let mut distribution: HashMap<Uuid, i64> = HashMap::new();
+    for c in &poll_choices {
+        distribution.insert(c.uuid, 0);
+    }
+
+    let mut counted_signatures = std::collections::HashSet::new();
+    for v in poll_votes {
+        if counted_signatures.insert(v.signature) {
+            *distribution.entry(v.choice_uuid).or_insert(0) += 1;
+        }
+    }
+
+    let winning_choice = distribution
+        .iter()
+        .max_by_key(|(_, &count)| count)
+        .and_then(|(uuid, &count)| if count > 0 { Some(*uuid) } else { None });
+
+    let current_status = if is_poll_closed(poll) {
+        "closed".to_string()
+    } else {
+        "open".to_string()
+    };
+
+    Ok(PollResultsResponse {
+        status: current_status,
+        winning_choice,
+        vote_distribution: distribution,
+    })
+}
+
 #[get("/polls/<poll_id>/votes")]
 pub async fn count_votes(poll_id: String) -> Result<Json<PollResultsResponse>, Custom<String>> {
     let target_poll_uuid = match Uuid::parse_str(&poll_id) {
@@ -189,47 +237,10 @@ pub async fn count_votes(poll_id: String) -> Result<Json<PollResultsResponse>, C
         None => return Err(Custom(Status::NotFound, "Poll not found".to_string())),
     };
 
-    let poll_choices: Vec<Choice> = choices
-        .filter(crate::schema::choices::poll_uuid.eq(target_poll_uuid))
-        .load::<Choice>(&mut conn)
+    let results = compute_poll_results(&poll, &mut conn)
         .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
 
-    let poll_votes: Vec<Vote> = votes
-        .inner_join(choices)
-        .filter(crate::schema::choices::poll_uuid.eq(target_poll_uuid))
-        .select(votes::all_columns())
-        .order_by((crate::schema::votes::signature.asc(), crate::schema::votes::created_at.desc()))
-        .load::<Vote>(&mut conn)
-        .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
-
-    let mut distribution: HashMap<Uuid, i64> = HashMap::new();
-    for c in &poll_choices {
-        distribution.insert(c.uuid, 0);
-    }
-
-    let mut counted_signatures = std::collections::HashSet::new();
-    for v in poll_votes {
-        if counted_signatures.insert(v.signature) {
-            *distribution.entry(v.choice_uuid).or_insert(0) += 1;
-        }
-    }
-
-    let winning_choice = distribution
-        .iter()
-        .max_by_key(|(_, &count)| count)
-        .and_then(|(uuid, &count)| if count > 0 { Some(*uuid) } else { None });
-
-    let current_status = if is_poll_closed(&poll) {
-        "closed".to_string()
-    } else {
-        "open".to_string()
-    };
-
-    Ok(Json(PollResultsResponse {
-        status: current_status,
-        winning_choice,
-        vote_distribution: distribution,
-    }))
+    Ok(Json(results))
 }
 
 #[get("/polls/<poll_id>")]
@@ -310,6 +321,92 @@ pub async fn get_poll_user_vote(
     }))
 }
 
+#[get("/votes/<voter_signature>?<query..>")]
+pub async fn get_user_vote_history(
+    voter_signature: &str,
+    query: Option<VoteHistoryQuery>,
+) -> Result<Json<Vec<VoteHistoryItem>>, Status> {
+    let mut conn = get_connection();
+
+    let mut filter_poll_uuids = Vec::new();
+    if let Some(ref q) = query {
+        for poll_id_str in &q.poll_id {
+            let parsed_id = Uuid::parse_str(poll_id_str).map_err(|_| Status::BadRequest)?;
+            filter_poll_uuids.push(parsed_id);
+        }
+    }
+
+    let user_votes_query = votes
+        .inner_join(choices)
+        .filter(crate::schema::votes::signature.eq(voter_signature));
+
+    let user_votes_with_choices: Vec<(Vote, Choice)> = if !filter_poll_uuids.is_empty() {
+        user_votes_query
+            .filter(crate::schema::choices::poll_uuid.eq_any(&filter_poll_uuids))
+            .order_by(crate::schema::votes::created_at.desc())
+            .select((votes::all_columns(), choices::all_columns()))
+            .load::<(Vote, Choice)>(&mut conn)
+            .map_err(|_| Status::InternalServerError)?
+    } else {
+        user_votes_query
+            .order_by(crate::schema::votes::created_at.desc())
+            .select((votes::all_columns(), choices::all_columns()))
+            .load::<(Vote, Choice)>(&mut conn)
+            .map_err(|_| Status::InternalServerError)?
+    };
+
+    let mut poll_cache: HashMap<Uuid, (Poll, PollResultsResponse)> = HashMap::new();
+    let mut history_items = Vec::new();
+
+    for (vote, choice) in user_votes_with_choices {
+        let poll_uuid = choice.poll_uuid;
+
+        let (poll, results) = match poll_cache.get(&poll_uuid) {
+            Some(cached) => cached.clone(),
+            None => {
+                let poll = polls
+                    .filter(crate::schema::polls::uuid.eq(poll_uuid))
+                    .first::<Poll>(&mut conn)
+                    .map_err(|_| Status::InternalServerError)?;
+
+                let results = compute_poll_results(&poll, &mut conn)
+                    .map_err(|_| Status::InternalServerError)?;
+
+                poll_cache.insert(poll_uuid, (poll.clone(), results.clone()));
+                (poll, results)
+            }
+        };
+
+        let is_closed = is_poll_closed(&poll);
+        let poll_status = if is_closed {
+            "closed".to_string()
+        } else {
+            "open".to_string()
+        };
+
+        let is_winning_choice = if is_closed {
+            match results.winning_choice {
+                Some(winner_uuid) => Some(vote.choice_uuid == winner_uuid),
+                None => Some(false),
+            }
+        } else {
+            None
+        };
+
+        history_items.push(VoteHistoryItem {
+            uuid: vote.uuid,
+            signature: vote.signature,
+            choice_uuid: vote.choice_uuid,
+            poll_uuid,
+            timestamp: vote.created_at.to_string(),
+            poll_status,
+            is_winning_choice,
+        });
+    }
+
+    Ok(Json(history_items))
+}
+
 pub fn get_connection() -> PgConnection {
     let database_url = env::var("DATABASE_URL").unwrap();
     PgConnection::establish(&database_url)
@@ -329,6 +426,8 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
             cast_vote_plural,
             count_votes,
             get_poll_user_vote,
+            get_user_vote_history,
         ],
     )
 }
+
