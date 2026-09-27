@@ -46,14 +46,15 @@ export class PollsFilterService {
       });
     }
 
+    const parseTime = (dateStr: string) => {
+      const time = new Date(dateStr).getTime();
+      return isNaN(time) ? 0 : time;
+    };
+
     if (options.status === 'open') {
-      result.sort(
-        (a, b) => new Date(a.close_date).getTime() - new Date(b.close_date).getTime()
-      );
+      result.sort((a, b) => parseTime(a.close_date) - parseTime(b.close_date));
     } else if (options.status === 'closed') {
-      result.sort(
-        (a, b) => new Date(b.close_date).getTime() - new Date(a.close_date).getTime()
-      );
+      result.sort((a, b) => parseTime(b.close_date) - parseTime(a.close_date));
     }
 
     return result;

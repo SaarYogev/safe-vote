@@ -41,10 +41,15 @@ export class SettingsScreenModel {
     this.state.message = null;
     this.notify();
 
-    const signature = await this.controller.getVoterSignature();
-    this.state.voterSignature = signature;
-    this.state.isLoading = false;
-    this.notify();
+    try {
+      const signature = await this.controller.getVoterSignature();
+      this.state.voterSignature = signature;
+    } catch (err: any) {
+      this.state.message = err?.message ?? 'Failed to load identity';
+    } finally {
+      this.state.isLoading = false;
+      this.notify();
+    }
   }
 
   async resetIdentity(): Promise<void> {
@@ -52,11 +57,16 @@ export class SettingsScreenModel {
     this.state.message = null;
     this.notify();
 
-    await this.controller.resetVoterIdentity();
-    const newSignature = await this.controller.getVoterSignature();
-    this.state.voterSignature = newSignature;
-    this.state.isLoading = false;
-    this.state.message = 'Anonymous voter signature reset successfully';
-    this.notify();
+    try {
+      await this.controller.resetVoterIdentity();
+      const newSignature = await this.controller.getVoterSignature();
+      this.state.voterSignature = newSignature;
+      this.state.message = 'Anonymous voter signature reset successfully';
+    } catch (err: any) {
+      this.state.message = err?.message ?? 'Failed to reset identity';
+    } finally {
+      this.state.isLoading = false;
+      this.notify();
+    }
   }
 }
