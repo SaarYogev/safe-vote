@@ -5,9 +5,10 @@ use rocket::http::{ContentType, Status};
 use rocket::local::blocking::Client;
 use rocket::serde::json::serde_json;
 use uuid::Uuid;
-use vote_server::get_connection;
-use vote_server::models::{NewChoice, NewPoll, NewVote, Poll, PollResultsResponse, VoteHistoryItem};
-use vote_server::rocket_app;
+use vote_server::{get_connection, rocket_app};
+use vote_server::models::{
+    NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse, PollResultsResponse, VoteHistoryItem,
+};
 use vote_server::schema::choices::dsl::choices;
 use vote_server::schema::polls::dsl::polls;
 use vote_server::schema::votes::dsl::votes;
@@ -583,6 +584,56 @@ fn test_get_user_vote_history_closed_poll_losing_choice() {
     assert_eq!(items[0].poll_status, "closed");
     assert_eq!(items[0].choice_uuid, losing_choice);
     assert_eq!(items[0].is_winning_choice, Some(false));
+}
+
+#[test]
+fn test_get_polls_listing_with_status_and_choices() {
+    let mut conn = vote_server::get_connection();
+    let client = Client::tracked(vote_server::rocket_app()).expect("valid rocket instance");
+
+    let open_poll_uuid = Uuid::new_v4();
+    let open_poll = NewPoll {
+        uuid: open_poll_uuid,
+        name: "Open Poll Listing Test".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&open_poll).execute(&mut conn).unwrap();
+
+    let choice_1 = NewChoice {
+        uuid: Uuid::new_v4(),
+        name: "Option A".to_string(),
+        poll_uuid: open_poll_uuid,
+    };
+    let choice_2 = NewChoice {
+        uuid: Uuid::new_v4(),
+        name: "Option B".to_string(),
+        poll_uuid: open_poll_uuid,
+    };
+    insert_into(choices).values(&vec![choice_1, choice_2]).execute(&mut conn).unwrap();
+
+    let closed_poll_uuid = Uuid::new_v4();
+    let closed_poll = NewPoll {
+        uuid: closed_poll_uuid,
+        name: "Closed Poll Listing Test".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2000-01-01".to_string(),
+    };
+    insert_into(polls).values(&closed_poll).execute(&mut conn).unwrap();
+
+    let res = client.get("/polls").dispatch();
+    assert_eq!(res.status(), Status::Ok);
+
+    let all_polls: Vec<PollDetailsResponse> = res.into_json().expect("valid json poll list");
+    
+    let found_open = all_polls.iter().find(|p| p.uuid == open_poll_uuid).expect("open poll found");
+    assert_eq!(found_open.name, "Open Poll Listing Test");
+    assert_eq!(found_open.status, "open");
+    assert_eq!(found_open.choices.len(), 2);
+
+    let found_closed = all_polls.iter().find(|p| p.uuid == closed_poll_uuid).expect("closed poll found");
+    assert_eq!(found_closed.name, "Closed Poll Listing Test");
+    assert_eq!(found_closed.status, "closed");
 }
 
 

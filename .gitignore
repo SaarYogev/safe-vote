@@ -17,3 +17,9 @@ Cargo.lock
 *.tgz
 
 vote_server/completions.sh
+
+# Node and Mobile artifacts
+node_modules/
+.expo/
+dist/
+coverage/

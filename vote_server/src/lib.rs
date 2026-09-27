@@ -124,6 +124,11 @@ pub async fn cast_vote(vote_details: Json<VoteCreationDetails>) -> Result<String
     cast_vote_handler(vote_details).await
 }
 
+#[post("/polls/<_poll_id>/votes", format = "json", data = "<vote_details>")]
+pub async fn cast_vote_nested(_poll_id: &str, vote_details: Json<VoteCreationDetails>) -> Result<String, Custom<String>> {
+    cast_vote_handler(vote_details).await
+}
+
 async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<String, Custom<String>> {
     let choice_id: Uuid = match vote_details.choice_uuid.parse() {
         Ok(id) => id,
@@ -241,6 +246,49 @@ pub async fn count_votes(poll_id: String) -> Result<Json<PollResultsResponse>, C
         .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
 
     Ok(Json(results))
+}
+
+#[get("/polls")]
+pub async fn get_polls() -> Result<Json<Vec<crate::models::PollDetailsResponse>>, Status> {
+    let mut conn = get_connection();
+    let all_polls = polls
+        .order_by(crate::schema::polls::start_date.desc())
+        .load::<Poll>(&mut conn)
+        .map_err(|_| Status::InternalServerError)?;
+
+    let mut poll_responses = Vec::with_capacity(all_polls.len());
+    for p in all_polls {
+        let poll_choices = choices
+            .filter(crate::schema::choices::poll_uuid.eq(p.uuid))
+            .load::<Choice>(&mut conn)
+            .map_err(|_| Status::InternalServerError)?;
+
+        let choice_responses = poll_choices
+            .into_iter()
+            .map(|c| crate::models::ChoiceResponse {
+                uuid: c.uuid,
+                name: c.name,
+                poll_uuid: c.poll_uuid,
+            })
+            .collect();
+
+        let current_status = if is_poll_closed(&p) {
+            "closed".to_string()
+        } else {
+            p.status.clone()
+        };
+
+        poll_responses.push(crate::models::PollDetailsResponse {
+            uuid: p.uuid,
+            name: p.name,
+            start_date: p.start_date,
+            close_date: p.close_date,
+            status: current_status,
+            choices: choice_responses,
+        });
+    }
+
+    Ok(Json(poll_responses))
 }
 
 #[get("/polls/<poll_id>")]
@@ -419,11 +467,13 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
         routes![
             create_poll,
             create_poll_plural,
+            get_polls,
             get_poll,
             create_choice,
             create_choice_plural,
             cast_vote,
             cast_vote_plural,
+            cast_vote_nested,
             count_votes,
             get_poll_user_vote,
             get_user_vote_history,
