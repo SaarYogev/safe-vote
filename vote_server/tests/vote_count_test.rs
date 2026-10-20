@@ -5,9 +5,10 @@ use rocket::http::{ContentType, Status};
 use rocket::local::blocking::Client;
 use rocket::serde::json::serde_json;
 use uuid::Uuid;
-use vote_server::{get_connection, rocket_app};
+use vote_server::{compute_tracker_hash, get_connection, rocket_app};
 use vote_server::models::{
-    NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse, PollResultsResponse, VoteHistoryItem,
+    NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse, PollResultsResponse, PollTrackersResponse,
+    VoteCreationDetails, VoteHistoryItem,
 };
 use vote_server::schema::choices::dsl::choices;
 use vote_server::schema::polls::dsl::polls;
@@ -77,6 +78,7 @@ fn test_count_votes_latest_unique_vote_and_distribution() {
             uuid: Uuid::new_v4(),
             signature: "voter_1_signature".to_string(),
             choice_uuid: choice_python,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -88,6 +90,7 @@ fn test_count_votes_latest_unique_vote_and_distribution() {
             uuid: Uuid::new_v4(),
             signature: "voter_1_signature".to_string(),
             choice_uuid: choice_rust,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -97,6 +100,7 @@ fn test_count_votes_latest_unique_vote_and_distribution() {
             uuid: Uuid::new_v4(),
             signature: "voter_2_signature".to_string(),
             choice_uuid: choice_rust,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -106,6 +110,7 @@ fn test_count_votes_latest_unique_vote_and_distribution() {
             uuid: Uuid::new_v4(),
             signature: "voter_3_signature".to_string(),
             choice_uuid: choice_python,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -405,16 +410,19 @@ fn test_get_user_vote_history_open_and_closed_polls() {
                 uuid: Uuid::new_v4(),
                 signature: voter_sig.clone(),
                 choice_uuid: closed_winning_choice,
+                tracker_hash: None,
             },
             NewVote {
                 uuid: Uuid::new_v4(),
                 signature: format!("other_voter_{}", Uuid::new_v4()),
                 choice_uuid: closed_winning_choice,
+                tracker_hash: None,
             },
             NewVote {
                 uuid: Uuid::new_v4(),
                 signature: format!("third_voter_{}", Uuid::new_v4()),
                 choice_uuid: closed_losing_choice,
+                tracker_hash: None,
             },
         ])
         .execute(&mut conn)
@@ -427,6 +435,7 @@ fn test_get_user_vote_history_open_and_closed_polls() {
             uuid: Uuid::new_v4(),
             signature: voter_sig.clone(),
             choice_uuid: open_choice_1,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -488,6 +497,7 @@ fn test_get_user_vote_history_filter_by_polls() {
                 uuid: Uuid::new_v4(),
                 signature: voter_sig.clone(),
                 choice_uuid: ch,
+                tracker_hash: None,
             })
             .execute(&mut conn)
             .unwrap();
@@ -559,6 +569,7 @@ fn test_get_user_vote_history_closed_poll_losing_choice() {
             uuid: Uuid::new_v4(),
             signature: voter_sig.clone(),
             choice_uuid: losing_choice,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -568,6 +579,7 @@ fn test_get_user_vote_history_closed_poll_losing_choice() {
             uuid: Uuid::new_v4(),
             signature: format!("another_{}", Uuid::new_v4()),
             choice_uuid: winning_choice,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -577,6 +589,7 @@ fn test_get_user_vote_history_closed_poll_losing_choice() {
             uuid: Uuid::new_v4(),
             signature: format!("third_{}", Uuid::new_v4()),
             choice_uuid: winning_choice,
+            tracker_hash: None,
         })
         .execute(&mut conn)
         .unwrap();
@@ -639,6 +652,91 @@ fn test_get_polls_listing_with_status_and_choices() {
     assert_eq!(found_closed.name, "Closed Poll Listing Test");
     assert_eq!(found_closed.status, "closed");
 }
+
+#[test]
+fn test_receipt_endpoint_is_unrouted_and_returns_404() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let res = client.get("/receipt/123").dispatch();
+    assert_eq!(res.status(), Status::NotFound);
+
+    let res_uuid = client.get(format!("/receipt/{}", Uuid::new_v4())).dispatch();
+    assert_eq!(res_uuid.status(), Status::NotFound);
+}
+
+#[test]
+fn test_cast_vote_with_tracker_hash_and_audit_trackers() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Tracker Audit Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Option 1".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let client_salt_1 = "salt_voter_alpha";
+    let tracker_1 = compute_tracker_hash(&choice_uuid.to_string(), client_salt_1);
+    let vote_payload_1 = VoteCreationDetails {
+        signature: "sig_voter_alpha_999".to_string(),
+        choice_uuid: choice_uuid.to_string(),
+        tracker_hash: Some(tracker_1.clone()),
+    };
+    let cast_res_1 = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&vote_payload_1).unwrap())
+        .dispatch();
+    assert_eq!(cast_res_1.status(), Status::Ok);
+
+    let client_salt_2 = "salt_voter_beta";
+    let tracker_2 = compute_tracker_hash(&choice_uuid.to_string(), client_salt_2);
+    let vote_payload_2 = VoteCreationDetails {
+        signature: "sig_voter_beta_888".to_string(),
+        choice_uuid: choice_uuid.to_string(),
+        tracker_hash: Some(tracker_2.clone()),
+    };
+    let cast_res_2 = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&vote_payload_2).unwrap())
+        .dispatch();
+    assert_eq!(cast_res_2.status(), Status::Ok);
+
+    let audit_res = client
+        .get(format!("/audit/trackers/{}", poll_uuid))
+        .dispatch();
+    assert_eq!(audit_res.status(), Status::Ok);
+
+    let audit_body: PollTrackersResponse = audit_res.into_json().expect("valid tracker response");
+    assert_eq!(audit_body.poll_id, poll_uuid);
+    assert_eq!(audit_body.total_votes, 2);
+    assert!(audit_body.trackers.contains(&tracker_1));
+    assert!(audit_body.trackers.contains(&tracker_2));
+    assert_eq!(audit_body.merkle_root.len(), 64);
+}
+
+#[test]
+fn test_audit_trackers_invalid_and_not_found() {
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let invalid_res = client.get("/audit/trackers/not-a-uuid").dispatch();
+    assert_eq!(invalid_res.status(), Status::BadRequest);
+
+    let not_found_res = client.get(format!("/audit/trackers/{}", Uuid::new_v4())).dispatch();
+    assert_eq!(not_found_res.status(), Status::NotFound);
+}
+
 
 
 

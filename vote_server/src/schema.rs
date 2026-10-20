@@ -26,6 +26,7 @@ diesel::table! {
         signature -> Varchar,
         choice_uuid -> Uuid,
         created_at -> Timestamp,
+        tracker_hash -> Nullable<Varchar>,
     }
 }
 

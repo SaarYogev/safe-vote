@@ -72,6 +72,7 @@ pub struct Vote {
     pub signature: String,
     pub choice_uuid: Uuid,
     pub created_at: NaiveDateTime,
+    pub tracker_hash: Option<String>,
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -80,13 +81,24 @@ pub struct NewVote {
     pub uuid: Uuid,
     pub signature: String,
     pub choice_uuid: Uuid,
+    pub tracker_hash: Option<String>,
 }
 
-#[derive(Deserialize, FromForm)]
+#[derive(Deserialize, Serialize, FromForm, Debug, Clone)]
 #[serde(crate = "rocket::serde")]
 pub struct VoteCreationDetails {
     pub signature: String,
     pub choice_uuid: String,
+    pub tracker_hash: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(crate = "rocket::serde")]
+pub struct PollTrackersResponse {
+    pub poll_id: Uuid,
+    pub merkle_root: String,
+    pub trackers: Vec<String>,
+    pub total_votes: usize,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

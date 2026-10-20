@@ -163,10 +163,15 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
         return Err(Custom(Status::Forbidden, "Poll is closed. Votes are no longer accepted.".to_string()));
     }
 
+    let tracker_hash = vote_details.tracker_hash.clone().unwrap_or_else(|| {
+        compute_tracker_hash(&choice_id.to_string(), &Uuid::new_v4().to_string())
+    });
+
     let new_vote = NewVote {
         uuid: Uuid::new_v4(),
         signature: vote_details.signature.clone(),
         choice_uuid: choice_id,
+        tracker_hash: Some(tracker_hash),
     };
 
     let vote_query_result = insert_into(votes).values(&new_vote).execute(&mut conn);
@@ -457,6 +462,82 @@ pub async fn get_user_vote_history(
     Ok(Json(history_items))
 }
 
+pub fn compute_tracker_hash(ballot_choice_id: &str, salt: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(ballot_choice_id.as_bytes());
+    hasher.update(salt.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+pub fn compute_merkle_root(trackers: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    if trackers.is_empty() {
+        return hex::encode(Sha256::digest(b""));
+    }
+    let mut current_level: Vec<Vec<u8>> = trackers
+        .iter()
+        .map(|t| hex::decode(t).unwrap_or_else(|_| Sha256::digest(t.as_bytes()).to_vec()))
+        .collect();
+    while current_level.len() > 1 {
+        let mut next_level = Vec::new();
+        for chunk in current_level.chunks(2) {
+            let mut hasher = Sha256::new();
+            hasher.update(&chunk[0]);
+            if chunk.len() > 1 {
+                hasher.update(&chunk[1]);
+            } else {
+                hasher.update(&chunk[0]);
+            }
+            next_level.push(hasher.finalize().to_vec());
+        }
+        current_level = next_level;
+    }
+    hex::encode(&current_level[0])
+}
+
+#[get("/audit/trackers/<poll_id>")]
+pub async fn get_poll_trackers(
+    poll_id: &str,
+) -> Result<Json<crate::models::PollTrackersResponse>, Status> {
+    let parsed_poll_uuid = Uuid::parse_str(poll_id).map_err(|_| Status::BadRequest)?;
+    let mut conn = get_connection();
+
+    let target_poll: Option<Poll> = schema::polls::table
+        .filter(schema::polls::uuid.eq(parsed_poll_uuid))
+        .first::<Poll>(&mut conn)
+        .optional()
+        .map_err(|_| Status::InternalServerError)?;
+
+    if target_poll.is_none() {
+        return Err(Status::NotFound);
+    }
+
+    let choice_ids: Vec<Uuid> = schema::choices::table
+        .filter(schema::choices::poll_uuid.eq(parsed_poll_uuid))
+        .select(schema::choices::uuid)
+        .load::<Uuid>(&mut conn)
+        .map_err(|_| Status::InternalServerError)?;
+
+    let tracker_hashes: Vec<Option<String>> = schema::votes::table
+        .filter(schema::votes::choice_uuid.eq_any(&choice_ids))
+        .order(schema::votes::created_at.asc())
+        .select(schema::votes::tracker_hash)
+        .load::<Option<String>>(&mut conn)
+        .map_err(|_| Status::InternalServerError)?;
+
+    let trackers: Vec<String> = tracker_hashes.into_iter().flatten().collect();
+    let merkle_root = compute_merkle_root(&trackers);
+    let total_votes = trackers.len();
+
+    Ok(Json(crate::models::PollTrackersResponse {
+        poll_id: parsed_poll_uuid,
+        merkle_root,
+        trackers,
+        total_votes,
+    }))
+}
+
 pub fn get_connection() -> PgConnection {
     let database_url = env::var("DATABASE_URL").unwrap();
     PgConnection::establish(&database_url)
@@ -479,6 +560,7 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
             count_votes,
             get_poll_user_vote,
             get_user_vote_history,
+            get_poll_trackers,
         ],
     )
 }
