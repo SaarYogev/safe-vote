@@ -437,11 +437,15 @@ fn test_get_user_vote_history_open_and_closed_polls() {
     assert_eq!(items.len(), 2);
 
     let open_item = items.iter().find(|i| i.poll_uuid == open_poll_uuid).expect("open poll item found");
+    assert_eq!(open_item.poll_name, "Open Poll");
+    assert_eq!(open_item.choice_name, "Open Choice 1");
     assert_eq!(open_item.poll_status, "open");
     assert_eq!(open_item.is_winning_choice, None);
     assert_eq!(open_item.choice_uuid, open_choice_1);
 
     let closed_item = items.iter().find(|i| i.poll_uuid == closed_poll_uuid).expect("closed poll item found");
+    assert_eq!(closed_item.poll_name, "Closed Poll");
+    assert_eq!(closed_item.choice_name, "Closed Choice Winner");
     assert_eq!(closed_item.poll_status, "closed");
     assert_eq!(closed_item.is_winning_choice, Some(true));
     assert_eq!(closed_item.choice_uuid, closed_winning_choice);

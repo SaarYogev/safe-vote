@@ -446,6 +446,8 @@ pub async fn get_user_vote_history(
             signature: vote.signature,
             choice_uuid: vote.choice_uuid,
             poll_uuid,
+            poll_name: poll.name.clone(),
+            choice_name: choice.name.clone(),
             timestamp: vote.created_at.to_string(),
             poll_status,
             is_winning_choice,

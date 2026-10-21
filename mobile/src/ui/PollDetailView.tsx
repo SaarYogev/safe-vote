@@ -9,6 +9,8 @@ import {
 } from 'react-native';
 import { PollDetailScreenModel, PollDetailState } from '../screens/PollDetailScreen';
 import { ChoiceResponse } from '../types';
+import { useTheme } from './theme/ThemeContext';
+import { Icon } from './components/Icon';
 
 export interface PollDetailViewProps {
   model: PollDetailScreenModel;
@@ -16,6 +18,7 @@ export interface PollDetailViewProps {
 }
 
 export const PollDetailView: React.FC<PollDetailViewProps> = ({ model, onBack }) => {
+  const { colors } = useTheme();
   const [state, setState] = useState<PollDetailState>(() => model.getState());
 
   useEffect(() => {
@@ -99,11 +102,13 @@ export const PollDetailView: React.FC<PollDetailViewProps> = ({ model, onBack })
         </View>
 
         {hasExistingVote && isOpen && (
-          <View style={styles.recastBanner}>
-            <Text style={styles.recastIcon}>ℹ️</Text>
+          <View style={[styles.recastBanner, { backgroundColor: colors.accentLight, borderLeftColor: colors.accent }]}>
+            <View style={styles.recastIcon}>
+              <Icon name="info" size={20} color={colors.accent} />
+            </View>
             <View style={styles.recastTextContainer}>
-              <Text style={styles.recastTitle}>Previous Ballot Recorded</Text>
-              <Text style={styles.recastSubtitle}>
+              <Text style={[styles.recastTitle, { color: colors.accent }]}>Previous Ballot Recorded</Text>
+              <Text style={[styles.recastSubtitle, { color: colors.text }]}>
                 You have already voted in this poll. Submitting a new selection will re-cast and update your ballot.
               </Text>
             </View>
@@ -210,7 +215,8 @@ export const PollDetailView: React.FC<PollDetailViewProps> = ({ model, onBack })
                       </Text>
                       {isWinner && (
                         <View style={styles.winnerBadge}>
-                          <Text style={styles.winnerBadgeText}>★ Winner</Text>
+                          <Icon name="badge-winner" size={14} color="#FFFFFF" />
+                          <Text style={styles.winnerBadgeText}>Winner</Text>
                         </View>
                       )}
                     </View>

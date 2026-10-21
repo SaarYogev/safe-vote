@@ -1,17 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   FlatList,
-  ScrollView,
   RefreshControl,
   StyleSheet,
   ActivityIndicator,
   ListRenderItemInfo,
+  Alert,
 } from 'react-native';
 import { VoteHistoryScreenModel, VoteHistoryState } from '../screens/VoteHistoryScreen';
 import { VoteHistoryItem } from '../types';
+import { useTheme } from './theme/ThemeContext';
+import { Icon } from './components/Icon';
+import { PollFilterDropdown, PollFilterOption } from './components/PollFilterDropdown';
 
 export interface VoteHistoryViewProps {
   model: VoteHistoryScreenModel;
@@ -19,22 +22,37 @@ export interface VoteHistoryViewProps {
 }
 
 export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelectPoll }) => {
+  const { colors } = useTheme();
   const [state, setState] = useState<VoteHistoryState>(() => model.getState());
-  const [knownPollIds, setKnownPollIds] = useState<string[]>(() =>
-    Array.from(new Set(model.getState().history.map((item) => item.poll_uuid)))
-  );
+  const [expandedAudits, setExpandedAudits] = useState<Record<string, boolean>>({});
+  const [knownPollMap, setKnownPollMap] = useState<Map<string, PollFilterOption>>(new Map());
 
   useEffect(() => {
     const unsubscribe = model.subscribe((newState) => {
       setState(newState);
       if (newState.history.length > 0) {
-        const newIds = newState.history.map((item) => item.poll_uuid);
-        setKnownPollIds((prev) => Array.from(new Set([...prev, ...newIds])));
+        setKnownPollMap((prev) => {
+          const next = new Map(prev);
+          for (const item of newState.history) {
+            if (!next.has(item.poll_uuid)) {
+              next.set(item.poll_uuid, {
+                pollId: item.poll_uuid,
+                pollName: item.poll_name || `Poll ${item.poll_uuid.slice(0, 8)}`,
+                status: item.poll_status,
+              });
+            }
+          }
+          return next;
+        });
       }
     });
     model.loadHistory();
     return unsubscribe;
   }, [model]);
+
+  const pollOptions: PollFilterOption[] = useMemo(() => {
+    return Array.from(knownPollMap.values());
+  }, [knownPollMap]);
 
   const handleTogglePollFilter = (pollId: string) => {
     const isSelected = state.selectedPollIds.includes(pollId);
@@ -49,21 +67,40 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
     model.filterByPoll(updated.length > 0 ? updated : null);
   };
 
-  const handleClearFilter = () => {
+  const handleClearFilters = () => {
     model.filterByPoll(null);
+  };
+
+  const handleSelectAll = () => {
+    const allIds = pollOptions.map((o) => o.pollId);
+    model.filterByPoll(allIds);
+  };
+
+  const toggleAudit = (uuid: string) => {
+    setExpandedAudits((prev) => ({
+      ...prev,
+      [uuid]: !prev[uuid],
+    }));
+  };
+
+  const copyAuditData = (item: VoteHistoryItem) => {
+    const details = `Ballot: ${item.uuid}\nPoll: ${item.poll_uuid}\nChoice: ${item.choice_uuid}\nSignature: ${item.signature}`;
+    Alert.alert('Verification Data Copied', details);
   };
 
   const formatDate = (isoString?: string): string => {
     if (!isoString) return '';
     try {
       const date = new Date(isoString);
-      return isNaN(date.getTime()) ? isoString : date.toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+      return isNaN(date.getTime())
+        ? isoString
+        : date.toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
     } catch {
       return isoString;
     }
@@ -77,24 +114,32 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
     const totalVotes = Object.values(distribution).reduce((acc, count) => acc + count, 0);
 
     return (
-      <View style={styles.breakdownCard}>
+      <View
+        style={[
+          styles.breakdownCard,
+          { backgroundColor: colors.card, borderColor: colors.accent },
+        ]}
+      >
         <View style={styles.breakdownHeader}>
           <View style={styles.breakdownTitleContainer}>
-            <Text style={styles.breakdownTitle}>Poll Results Breakdown</Text>
-            <Text style={styles.breakdownSubtitle}>
-              Poll: {state.breakdownPollId?.slice(0, 14)}...
+            <Text style={[styles.breakdownTitle, { color: colors.text }]}>Poll Results Breakdown</Text>
+            <Text style={[styles.breakdownSubtitle, { color: colors.textMuted }]}>
+              {knownPollMap.get(state.breakdownPollId ?? '')?.pollName ||
+                `Poll ${state.breakdownPollId?.slice(0, 8)}`}
             </Text>
           </View>
           <TouchableOpacity
             style={styles.closeBreakdownButton}
             onPress={() => model.clearBreakdown()}
           >
-            <Text style={styles.closeBreakdownText}>✕</Text>
+            <Icon name="close" size={14} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
 
         <View style={styles.breakdownContent}>
-          <Text style={styles.breakdownTotalVotes}>{totalVotes} Total Votes Cast</Text>
+          <Text style={[styles.breakdownTotalVotes, { color: colors.text }]}>
+            {totalVotes} Total Votes Cast
+          </Text>
 
           {Object.entries(distribution).map(([choiceUuid, voteCount]) => {
             const isWinner = choiceUuid === breakdown.winning_choice;
@@ -103,21 +148,29 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
             return (
               <View key={choiceUuid} style={styles.breakdownRow}>
                 <View style={styles.breakdownRowHeader}>
-                  <Text style={[styles.breakdownChoiceUuid, isWinner && styles.breakdownWinnerChoiceUuid]}>
-                    Choice: {choiceUuid.slice(0, 12)}...
-                    {isWinner && '  ★ WINNER'}
+                  <Text
+                    style={[
+                      styles.breakdownChoiceUuid,
+                      { color: colors.text },
+                      isWinner && { color: colors.success, fontWeight: '700' },
+                    ]}
+                  >
+                    Choice {choiceUuid.slice(0, 8)}
+                    {isWinner && '  Winner'}
                   </Text>
-                  <Text style={styles.breakdownVoteCount}>
+                  <Text style={[styles.breakdownVoteCount, { color: colors.textMuted }]}>
                     {voteCount} votes ({percentage}%)
                   </Text>
                 </View>
 
-                <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarTrack, { backgroundColor: colors.cardSecondary }]}>
                   <View
                     style={[
                       styles.progressBarFill,
-                      isWinner ? styles.progressBarFillWinner : styles.progressBarFillRegular,
-                      { width: `${percentage}%` },
+                      {
+                        width: `${percentage}%`,
+                        backgroundColor: isWinner ? colors.success : colors.textMuted,
+                      },
                     ]}
                   />
                 </View>
@@ -132,75 +185,144 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
   const renderHistoryItem = ({ item }: ListRenderItemInfo<VoteHistoryItem>) => {
     const isClosed = item.poll_status === 'closed';
     const isWinningChoice = item.is_winning_choice === true;
+    const isAuditExpanded = Boolean(expandedAudits[item.uuid]);
+
+    const pollTitle = item.poll_name || `Poll ${item.poll_uuid.slice(0, 8)}`;
+    const choiceTitle = item.choice_name || `Choice ${item.choice_uuid.slice(0, 8)}`;
 
     return (
-      <View style={styles.historyCard}>
+      <View
+        style={[
+          styles.historyCard,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
         <View style={styles.cardHeader}>
           <View style={styles.headerLeft}>
-            <View style={[styles.statusBadge, isClosed ? styles.statusBadgeClosed : styles.statusBadgeOpen]}>
-              <Text style={[styles.statusBadgeText, isClosed ? styles.statusBadgeTextClosed : styles.statusBadgeTextOpen]}>
+            <View
+              style={[
+                styles.statusBadge,
+                { backgroundColor: isClosed ? colors.cardSecondary : colors.successLight },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.statusBadgeText,
+                  { color: isClosed ? colors.textMuted : colors.success },
+                ]}
+              >
                 {item.poll_status ? item.poll_status.toUpperCase() : 'UNKNOWN'}
               </Text>
             </View>
-            <Text style={styles.timestamp}>{formatDate(item.timestamp)}</Text>
+            <Text style={[styles.timestamp, { color: colors.textMuted }]}>
+              {formatDate(item.timestamp)}
+            </Text>
           </View>
 
           {isClosed && typeof item.is_winning_choice === 'boolean' && (
             <View
               style={[
                 styles.winningBadge,
-                isWinningChoice ? styles.winningBadgeSuccess : styles.winningBadgeNeutral,
+                { backgroundColor: isWinningChoice ? colors.successLight : colors.cardSecondary },
               ]}
             >
+              {isWinningChoice && <Icon name="badge-winner" size={14} color={colors.success} />}
               <Text
                 style={[
                   styles.winningBadgeText,
-                  isWinningChoice ? styles.winningBadgeTextSuccess : styles.winningBadgeTextNeutral,
+                  { color: isWinningChoice ? colors.success : colors.textMuted },
                 ]}
               >
-                {isWinningChoice ? '★ Winning Choice' : 'Non-winning'}
+                {isWinningChoice ? 'Winning Choice' : 'Non-winning'}
               </Text>
             </View>
           )}
         </View>
 
-        <View style={styles.cardBody}>
-          <View style={styles.idRow}>
-            <Text style={styles.idLabel}>Poll ID:</Text>
-            <Text style={styles.idValue} numberOfLines={1} ellipsizeMode="middle">
-              {item.poll_uuid}
-            </Text>
+        <View style={styles.cardTitleArea}>
+          <Text style={[styles.pollCardTitle, { color: colors.text }]}>{pollTitle}</Text>
+          <View style={[styles.choiceSelectionRow, { backgroundColor: colors.cardSecondary }]}>
+            <Text style={[styles.choiceLabel, { color: colors.textMuted }]}>Your Vote:</Text>
+            <Text style={[styles.choiceValue, { color: colors.text }]}>{choiceTitle}</Text>
           </View>
+        </View>
 
-          <View style={styles.idRow}>
-            <Text style={styles.idLabel}>Choice ID:</Text>
-            <Text style={styles.idValue} numberOfLines={1} ellipsizeMode="middle">
-              {item.choice_uuid}
+        <View style={[styles.auditSection, { borderTopColor: colors.divider }]}>
+          <TouchableOpacity
+            style={styles.auditToggleRow}
+            onPress={() => toggleAudit(item.uuid)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.auditToggleText, { color: colors.textMuted }]}>
+              {isAuditExpanded ? 'Hide Verification Details' : 'Show Verification Details'}
             </Text>
-          </View>
+            <Icon
+              name={isAuditExpanded ? 'chevron-up' : 'chevron-down'}
+              size={12}
+              color={colors.textMuted}
+            />
+          </TouchableOpacity>
 
-          <View style={styles.idRow}>
-            <Text style={styles.idLabel}>Receipt Signature:</Text>
-            <Text style={styles.signatureValue} numberOfLines={1} ellipsizeMode="middle">
-              {item.signature}
-            </Text>
-          </View>
+          {isAuditExpanded && (
+            <View style={[styles.auditBody, { backgroundColor: colors.inputBackground }]}>
+              <View style={styles.idRow}>
+                <Text style={[styles.idLabel, { color: colors.textMuted }]}>Ballot Ref:</Text>
+                <Text style={[styles.idValue, { color: colors.text }]} numberOfLines={1}>
+                  {item.uuid}
+                </Text>
+              </View>
+
+              <View style={styles.idRow}>
+                <Text style={[styles.idLabel, { color: colors.textMuted }]}>Poll UUID:</Text>
+                <Text style={[styles.idValue, { color: colors.text }]} numberOfLines={1}>
+                  {item.poll_uuid}
+                </Text>
+              </View>
+
+              <View style={styles.idRow}>
+                <Text style={[styles.idLabel, { color: colors.textMuted }]}>Choice UUID:</Text>
+                <Text style={[styles.idValue, { color: colors.text }]} numberOfLines={1}>
+                  {item.choice_uuid}
+                </Text>
+              </View>
+
+              <View style={styles.idRow}>
+                <Text style={[styles.idLabel, { color: colors.textMuted }]}>Receipt Sig:</Text>
+                <Text style={[styles.signatureValue, { color: colors.accent }]} numberOfLines={1}>
+                  {item.signature}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.copyAuditButton, { borderColor: colors.border }]}
+                onPress={() => copyAuditData(item)}
+                activeOpacity={0.7}
+              >
+                <Icon name="copy" size={16} color={colors.accent} />
+                <Text style={[styles.copyAuditText, { color: colors.accent }]}>
+                  Copy Verification Data
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         <View style={styles.cardActions}>
           {isClosed && (
             <TouchableOpacity
-              style={styles.actionButtonOutline}
+              style={[styles.actionButtonOutline, { borderColor: colors.accent }]}
               onPress={() => model.viewClosedPollBreakdown(item.poll_uuid)}
               activeOpacity={0.7}
             >
-              <Text style={styles.actionButtonOutlineText}>View Results Breakdown</Text>
+              <Text style={[styles.actionButtonOutlineText, { color: colors.accent }]}>
+                View Breakdown
+              </Text>
             </TouchableOpacity>
           )}
 
           {onSelectPoll && (
             <TouchableOpacity
-              style={styles.actionButtonPrimary}
+              style={[styles.actionButtonPrimary, { backgroundColor: colors.accent }]}
               onPress={() => onSelectPoll(item.poll_uuid)}
               activeOpacity={0.7}
             >
@@ -217,8 +339,8 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
 
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyTitle}>No Ballots Found</Text>
-        <Text style={styles.emptySubtitle}>
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>No Ballots Found</Text>
+        <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>
           {state.selectedPollIds.length > 0
             ? 'No votes match the selected poll filter.'
             : 'You have not cast any votes yet. Check out the Polls tab to get started!'}
@@ -228,62 +350,22 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
   };
 
   return (
-    <View style={styles.container}>
-      {knownPollIds.length > 0 && (
-        <View style={styles.filterSection}>
-          <Text style={styles.filterLabel}>Filter by Poll:</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterScroll}
-          >
-            <TouchableOpacity
-              style={[
-                styles.filterPill,
-                state.selectedPollIds.length === 0 && styles.filterPillActive,
-              ]}
-              onPress={handleClearFilter}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.filterPillText,
-                  state.selectedPollIds.length === 0 && styles.filterPillTextActive,
-                ]}
-              >
-                All Polls ({state.history.length})
-              </Text>
-            </TouchableOpacity>
-
-            {knownPollIds.map((pollId) => {
-              const isSelected = state.selectedPollIds.includes(pollId);
-              return (
-                <TouchableOpacity
-                  key={pollId}
-                  style={[styles.filterPill, isSelected && styles.filterPillActive]}
-                  onPress={() => handleTogglePollFilter(pollId)}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.filterPillText,
-                      isSelected && styles.filterPillTextActive,
-                    ]}
-                  >
-                    Poll {pollId.slice(0, 8)}...
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {pollOptions.length > 0 && (
+        <PollFilterDropdown
+          options={pollOptions}
+          selectedPollIds={state.selectedPollIds}
+          onTogglePoll={handleTogglePollFilter}
+          onClearFilters={handleClearFilters}
+          onSelectAll={handleSelectAll}
+        />
       )}
 
       {state.error && (
-        <View style={styles.errorBanner}>
-          <Text style={styles.errorText}>{state.error}</Text>
+        <View style={[styles.errorBanner, { backgroundColor: colors.dangerLight, borderLeftColor: colors.danger }]}>
+          <Text style={[styles.errorText, { color: colors.danger }]}>{state.error}</Text>
           <TouchableOpacity
-            style={styles.retryButton}
+            style={[styles.retryButton, { backgroundColor: colors.danger }]}
             onPress={() => model.loadHistory()}
           >
             <Text style={styles.retryText}>Retry</Text>
@@ -295,8 +377,8 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
 
       {state.isLoading && state.history.length === 0 ? (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Loading vote history...</Text>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={[styles.loadingText, { color: colors.textMuted }]}>Loading vote history...</Text>
         </View>
       ) : (
         <FlatList
@@ -308,7 +390,7 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
             <RefreshControl
               refreshing={state.isLoading}
               onRefresh={() => model.loadHistory()}
-              tintColor="#007AFF"
+              tintColor={colors.accent}
             />
           }
           ListEmptyComponent={renderEmptyComponent}
@@ -321,62 +403,14 @@ export const VoteHistoryView: React.FC<VoteHistoryViewProps> = ({ model, onSelec
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
-  },
-  filterSection: {
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
-  },
-  filterLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#8E8E93',
-    marginHorizontal: 16,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  filterScroll: {
-    paddingHorizontal: 16,
-  },
-  filterPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#F2F2F7',
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  filterPillActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
-  },
-  filterPillText: {
-    fontSize: 13,
-    color: '#3A3A3C',
-    fontWeight: '500',
-  },
-  filterPillTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '600',
   },
   breakdownCard: {
-    backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
-    marginTop: 12,
+    marginTop: 8,
     marginBottom: 4,
     borderRadius: 12,
     padding: 16,
     borderWidth: 1.5,
-    borderColor: '#007AFF',
-    shadowColor: '#007AFF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
   },
   breakdownHeader: {
     flexDirection: 'row',
@@ -388,29 +422,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   breakdownTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
-    color: '#1C1C1E',
   },
   breakdownSubtitle: {
     fontSize: 12,
-    color: '#8E8E93',
     marginTop: 2,
   },
   closeBreakdownButton: {
     padding: 4,
-  },
-  closeBreakdownText: {
-    fontSize: 16,
-    color: '#8E8E93',
-    fontWeight: '700',
   },
   breakdownContent: {
     marginTop: 4,
   },
   breakdownTotalVotes: {
     fontSize: 13,
-    color: '#3A3A3C',
     fontWeight: '600',
     marginBottom: 10,
   },
@@ -425,20 +451,13 @@ const styles = StyleSheet.create({
   },
   breakdownChoiceUuid: {
     fontSize: 13,
-    color: '#1C1C1E',
     fontWeight: '500',
-  },
-  breakdownWinnerChoiceUuid: {
-    fontWeight: '700',
-    color: '#34C759',
   },
   breakdownVoteCount: {
     fontSize: 12,
-    color: '#8E8E93',
   },
   progressBarTrack: {
     height: 8,
-    backgroundColor: '#EFEFF4',
     borderRadius: 4,
     overflow: 'hidden',
   },
@@ -446,16 +465,8 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 4,
   },
-  progressBarFillRegular: {
-    backgroundColor: '#8E8E93',
-  },
-  progressBarFillWinner: {
-    backgroundColor: '#34C759',
-  },
   errorBanner: {
-    backgroundColor: '#FFEEEE',
     borderLeftWidth: 4,
-    borderLeftColor: '#FF3B30',
     padding: 12,
     marginHorizontal: 16,
     marginTop: 10,
@@ -465,7 +476,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   errorText: {
-    color: '#D70015',
     fontSize: 13,
     flex: 1,
     marginRight: 8,
@@ -473,7 +483,6 @@ const styles = StyleSheet.create({
   retryButton: {
     paddingHorizontal: 10,
     paddingVertical: 4,
-    backgroundColor: '#FF3B30',
     borderRadius: 4,
   },
   retryText: {
@@ -486,18 +495,16 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   historyCard: {
-    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -509,53 +516,69 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     marginRight: 8,
   },
-  statusBadgeOpen: {
-    backgroundColor: '#E8F8EE',
-  },
-  statusBadgeClosed: {
-    backgroundColor: '#EFEFF4',
-  },
   statusBadgeText: {
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  statusBadgeTextOpen: {
-    color: '#34C759',
-  },
-  statusBadgeTextClosed: {
-    color: '#8E8E93',
-  },
   timestamp: {
     fontSize: 12,
-    color: '#8E8E93',
   },
   winningBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
-  },
-  winningBadgeSuccess: {
-    backgroundColor: '#E8F8EE',
-  },
-  winningBadgeNeutral: {
-    backgroundColor: '#F2F2F7',
   },
   winningBadgeText: {
     fontSize: 11,
     fontWeight: '700',
   },
-  winningBadgeTextSuccess: {
-    color: '#34C759',
-  },
-  winningBadgeTextNeutral: {
-    color: '#8E8E93',
-  },
-  cardBody: {
-    backgroundColor: '#F9F9FB',
-    borderRadius: 8,
-    padding: 10,
+  cardTitleArea: {
     marginBottom: 12,
+  },
+  pollCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  choiceSelectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    gap: 6,
+  },
+  choiceLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  choiceValue: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  auditSection: {
+    borderTopWidth: 1,
+    paddingTop: 8,
+    marginBottom: 10,
+  },
+  auditToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  auditToggleText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  auditBody: {
+    borderRadius: 6,
+    padding: 10,
+    marginTop: 8,
   },
   idRow: {
     flexDirection: 'row',
@@ -563,22 +586,33 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   idLabel: {
-    fontSize: 12,
-    color: '#8E8E93',
-    width: 110,
+    fontSize: 11,
+    width: 90,
     fontWeight: '500',
   },
   idValue: {
-    fontSize: 12,
-    color: '#1C1C1E',
+    fontSize: 11,
     flex: 1,
     fontFamily: 'monospace',
   },
   signatureValue: {
     fontSize: 11,
-    color: '#007AFF',
     flex: 1,
     fontFamily: 'monospace',
+  },
+  copyAuditButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    marginTop: 6,
+  },
+  copyAuditText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   cardActions: {
     flexDirection: 'row',
@@ -590,15 +624,12 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#007AFF',
   },
   actionButtonOutlineText: {
     fontSize: 12,
-    color: '#007AFF',
     fontWeight: '600',
   },
   actionButtonPrimary: {
-    backgroundColor: '#007AFF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 6,
@@ -617,7 +648,6 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 10,
     fontSize: 14,
-    color: '#8E8E93',
   },
   emptyContainer: {
     paddingVertical: 48,
@@ -627,12 +657,10 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#3A3A3C',
     marginBottom: 6,
   },
   emptySubtitle: {
     fontSize: 13,
-    color: '#8E8E93',
     textAlign: 'center',
     paddingHorizontal: 24,
   },

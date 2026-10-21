@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { PollsListScreenModel, PollsListState, PollsTab } from '../screens/PollsListScreen';
 import { PollDetailsResponse } from '../types';
+import { useTheme } from './theme/ThemeContext';
+import { Icon } from './components/Icon';
 
 export interface PollsListViewProps {
   model: PollsListScreenModel;
@@ -19,6 +21,7 @@ export interface PollsListViewProps {
 }
 
 export const PollsListView: React.FC<PollsListViewProps> = ({ model, onSelectPoll }) => {
+  const { colors } = useTheme();
   const [state, setState] = useState<PollsListState>(() => model.getState());
 
   useEffect(() => {
@@ -152,7 +155,7 @@ export const PollsListView: React.FC<PollsListViewProps> = ({ model, onSelectPol
             style={styles.clearSearchButton}
             onPress={() => handleSearchChange('')}
           >
-            <Text style={styles.clearSearchText}>✕</Text>
+            <Icon name="close" size={12} color={colors.textMuted} />
           </TouchableOpacity>
         )}
       </View>

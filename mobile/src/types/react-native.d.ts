@@ -31,6 +31,12 @@ declare module 'react-native' {
     borderBottomWidth?: number;
     borderLeftWidth?: number;
     borderRightWidth?: number;
+    borderTopColor?: string;
+    borderBottomColor?: string;
+    borderLeftColor?: string;
+    borderRightColor?: string;
+    borderStyle?: 'solid' | 'dotted' | 'dashed';
+    transform?: any[];
     borderTopLeftRadius?: number;
     borderTopRightRadius?: number;
     borderBottomLeftRadius?: number;
@@ -42,6 +48,7 @@ declare module 'react-native' {
     maxWidth?: number | string;
     maxHeight?: number | string;
     opacity?: number;
+    gap?: number;
     overflow?: 'visible' | 'hidden' | 'scroll';
     position?: 'absolute' | 'relative';
     top?: number | string;
@@ -69,7 +76,7 @@ declare module 'react-native' {
     textTransform?: 'none' | 'capitalize' | 'uppercase' | 'lowercase';
   }
 
-  export type StyleProp<T> = T | Array<T | undefined | null | false> | undefined | null | false;
+  export type StyleProp<T> = T | (T | undefined | null | false | (T | undefined | null | false | (T | undefined | null | false)[])[])[] | undefined | null | false;
 
   export interface ViewProps {
     style?: StyleProp<ViewStyle>;
@@ -83,6 +90,7 @@ declare module 'react-native' {
     children?: React.ReactNode;
     numberOfLines?: number;
     ellipsizeMode?: 'head' | 'middle' | 'tail' | 'clip';
+    selectable?: boolean;
     testID?: string;
     key?: React.Key;
   }
@@ -92,6 +100,23 @@ declare module 'react-native' {
     activeOpacity?: number;
     disabled?: boolean;
   }
+
+  export interface ImageStyle extends ViewStyle {
+    tintColor?: string;
+    resizeMode?: 'cover' | 'contain' | 'stretch' | 'repeat' | 'center';
+  }
+
+  export interface ImageSourcePropType {
+    uri?: string;
+  }
+
+  export interface ImageProps {
+    source: ImageSourcePropType | number;
+    style?: StyleProp<ImageStyle>;
+    resizeMode?: 'cover' | 'contain' | 'stretch' | 'repeat' | 'center';
+  }
+
+  export const Image: React.FC<ImageProps>;
 
   export interface TextInputProps extends ViewProps {
     value?: string;
@@ -162,7 +187,16 @@ declare module 'react-native' {
   export function FlatList<ItemT>(props: FlatListProps<ItemT>): React.ReactElement;
   export const ActivityIndicator: React.FC<ActivityIndicatorProps>;
   export const SafeAreaView: React.FC<ViewProps>;
-  export const StatusBar: React.FC<StatusBarProps>;
+  export const StatusBar: React.FC<StatusBarProps> & {
+    currentHeight?: number;
+  };
+
+  export interface PlatformOSType {
+    OS: 'ios' | 'android' | 'windows' | 'macos' | 'web';
+    select<T>(specifics: { [platform in 'ios' | 'android' | 'default']?: T }): T;
+  }
+
+  export const Platform: PlatformOSType;
 
   export interface AlertButton {
     text?: string;
@@ -183,4 +217,19 @@ declare module 'react-native' {
   export const StyleSheet: {
     create<T extends NamedStyles<T> | NamedStyles<any>>(styles: T | NamedStyles<T>): T;
   };
+
+  export type ColorSchemeName = 'light' | 'dark' | null | undefined;
+
+  export interface AppearancePreferences {
+    colorScheme?: ColorSchemeName;
+  }
+
+  export type AppearanceListener = (preferences: AppearancePreferences) => void;
+
+  export const Appearance: {
+    getColorScheme(): ColorSchemeName;
+    addChangeListener(listener: AppearanceListener): { remove: () => void };
+  };
+
+  export function useColorScheme(): ColorSchemeName;
 }

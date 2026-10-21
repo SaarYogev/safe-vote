@@ -3,6 +3,7 @@ import { AppController, AppConfig } from './controllers/AppController';
 import { DefaultMemoryStorage } from './services/DefaultMemoryStorage';
 import { DefaultHttpTransport } from './services/DefaultHttpTransport';
 import { AppNavigator } from './navigation/AppNavigator';
+import { ThemeProvider } from './ui/theme/ThemeContext';
 
 export { DefaultMemoryStorage, DefaultHttpTransport };
 
@@ -26,7 +27,11 @@ export const App: React.FC<AppRootProps> = ({ controller: propController, config
     return new AppController(resolvedConfig);
   }, [propController, config]);
 
-  return <AppNavigator controller={controller} />;
+  return (
+    <ThemeProvider storage={controller.getStorage()}>
+      <AppNavigator controller={controller} />
+    </ThemeProvider>
+  );
 };
 
 export default App;
