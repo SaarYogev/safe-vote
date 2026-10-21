@@ -41,6 +41,8 @@ export interface VoteHistoryItem {
   signature: string;
   choice_uuid: string;
   poll_uuid: string;
+  poll_name?: string;
+  choice_name?: string;
   timestamp: string;
   poll_status: 'open' | 'closed' | string;
   is_winning_choice: boolean | null;

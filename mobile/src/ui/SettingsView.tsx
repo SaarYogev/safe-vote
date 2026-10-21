@@ -10,14 +10,17 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SettingsScreenModel, SettingsState } from '../screens/SettingsScreen';
+import { useTheme, ThemeMode } from './theme/ThemeContext';
+import { Icon } from './components/Icon';
 
 export interface SettingsViewProps {
   model: SettingsScreenModel;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
+  const { colors, themeMode, setThemeMode } = useTheme();
   const [state, setState] = useState<SettingsState>(() => model.getState());
-  const [showFullSignature, setShowFullSignature] = useState(false);
+  const [isRevealed, setIsRevealed] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const [serverUrlInput, setServerUrlInput] = useState(state.serverUrl);
 
@@ -52,6 +55,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
           style: 'destructive',
           onPress: () => {
             model.resetIdentity();
+            setIsRevealed(false);
           },
         },
       ]
@@ -62,83 +66,165 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
     Alert.alert('Server Configuration', `Backend URL configured to: ${serverUrlInput}`);
   };
 
-  const displaySignature = () => {
+  const handleSelectTheme = async (mode: ThemeMode) => {
+    await model.setThemeMode(mode);
+    await setThemeMode(mode);
+  };
+
+  const renderSignatureContent = () => {
+    if (state.isLoading) {
+      return <ActivityIndicator size="small" color={colors.accent} />;
+    }
     if (!state.voterSignature) {
-      return 'No signature found';
+      return <Text style={[styles.signatureText, { color: colors.textMuted }]}>No signature found</Text>;
     }
-    if (showFullSignature) {
-      return state.voterSignature;
+    if (isRevealed) {
+      return (
+        <Text style={[styles.signatureText, { color: colors.accent }]} selectable>
+          {state.voterSignature}
+        </Text>
+      );
     }
-    if (state.voterSignature.length > 20) {
-      return `${state.voterSignature.slice(0, 10)}...${state.voterSignature.slice(-10)}`;
-    }
-    return state.voterSignature;
+    return (
+      <Text style={[styles.signatureMasked, { color: colors.textMuted }]}>
+        {model.getMaskedSignature()}
+      </Text>
+    );
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      contentContainerStyle={styles.scrollContent}
+    >
       {state.message && (
-        <View style={styles.messageBanner}>
-          <Text style={styles.messageText}>{state.message}</Text>
+        <View style={[styles.messageBanner, { backgroundColor: colors.successLight, borderLeftColor: colors.success }]}>
+          <Text style={[styles.messageText, { color: colors.success }]}>{state.message}</Text>
         </View>
       )}
 
       {copyFeedback && (
-        <View style={styles.copyBanner}>
-          <Text style={styles.copyBannerText}>{copyFeedback}</Text>
+        <View style={[styles.copyBanner, { backgroundColor: colors.accentLight, borderLeftColor: colors.accent }]}>
+          <Text style={[styles.copyBannerText, { color: colors.accent }]}>{copyFeedback}</Text>
         </View>
       )}
 
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Anonymous Voter Identity</Text>
-          <View style={styles.statusBadge}>
-            <Text style={styles.statusBadgeText}>ACTIVE</Text>
-          </View>
-        </View>
-        <Text style={styles.sectionDescription}>
-          SafeVote generates a cryptographically secure random device signature. It ensures one ballot per poll while protecting voter anonymity.
+      <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance & Theme</Text>
+        <Text style={[styles.sectionDescription, { color: colors.textMuted }]}>
+          Choose whether SafeVote follows your system display settings or remains locked to dark or light mode.
         </Text>
 
-        <View style={styles.signatureBox}>
-          {state.isLoading ? (
-            <ActivityIndicator size="small" color="#007AFF" />
-          ) : (
-            <Text style={styles.signatureText} numberOfLines={showFullSignature ? 0 : 1}>
-              {displaySignature()}
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.buttonRow}>
+        <View style={[styles.themeSegmentContainer, { backgroundColor: colors.cardSecondary, borderColor: colors.border }]}>
           <TouchableOpacity
-            style={styles.outlineButton}
-            onPress={() => setShowFullSignature(!showFullSignature)}
-            activeOpacity={0.7}
+            style={[
+              styles.themeSegmentButton,
+              themeMode === 'system' && [styles.themeSegmentActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleSelectTheme('system')}
+            activeOpacity={0.8}
           >
-            <Text style={styles.outlineButtonText}>
-              {showFullSignature ? 'Hide Full' : 'View Full'}
+            <Text
+              style={[
+                styles.themeSegmentText,
+                { color: colors.textMuted },
+                themeMode === 'system' && [styles.themeSegmentTextActive, { color: colors.accent }],
+              ]}
+            >
+              System (Default)
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={handleCopySignature}
-            activeOpacity={0.7}
+            style={[
+              styles.themeSegmentButton,
+              themeMode === 'dark' && [styles.themeSegmentActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleSelectTheme('dark')}
+            activeOpacity={0.8}
           >
-            <Text style={styles.primaryButtonText}>Copy Signature</Text>
+            <Text
+              style={[
+                styles.themeSegmentText,
+                { color: colors.textMuted },
+                themeMode === 'dark' && [styles.themeSegmentTextActive, { color: colors.accent }],
+              ]}
+            >
+              Dark
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.themeSegmentButton,
+              themeMode === 'light' && [styles.themeSegmentActive, { backgroundColor: colors.card }],
+            ]}
+            onPress={() => handleSelectTheme('light')}
+            activeOpacity={0.8}
+          >
+            <Text
+              style={[
+                styles.themeSegmentText,
+                { color: colors.textMuted },
+                themeMode === 'light' && [styles.themeSegmentTextActive, { color: colors.accent }],
+              ]}
+            >
+              Light
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Identity Lifecycle</Text>
-        <Text style={styles.sectionDescription}>
-          Need to test multiple voters or simulate a fresh device? Resetting clears your existing identity and produces a fresh cryptographic signature.
+      <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Anonymous Voter Signature</Text>
+          <View style={[styles.statusBadge, { backgroundColor: colors.successLight }]}>
+            <Text style={[styles.statusBadgeText, { color: colors.success }]}>ACTIVE</Text>
+          </View>
+        </View>
+        <Text style={[styles.sectionDescription, { color: colors.textMuted }]}>
+          Your private cryptographic identity. Kept secret and masked to prevent unauthorized viewing, just like an API key.
+        </Text>
+
+        <View style={[styles.signatureBox, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          {renderSignatureContent()}
+        </View>
+
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.outlineButton, { borderColor: colors.border }]}
+            onPress={() => setIsRevealed(!isRevealed)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.buttonIconRow}>
+              <Icon name={isRevealed ? 'eye-off' : 'eye'} size={22} color={colors.text} />
+              <Text style={[styles.outlineButtonText, { color: colors.text }]}>
+                {isRevealed ? 'Hide' : 'Reveal'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.primaryButton, { backgroundColor: colors.accent }]}
+            onPress={handleCopySignature}
+            activeOpacity={0.7}
+          >
+            <View style={styles.buttonIconRow}>
+              <Icon name="copy" size={22} color="#FFFFFF" />
+              <Text style={styles.primaryButtonText}>Copy Signature</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Identity Lifecycle</Text>
+        <Text style={[styles.sectionDescription, { color: colors.textMuted }]}>
+          Resetting clears your existing identity and produces a fresh cryptographic signature. Previous votes will no longer be linked to this device.
         </Text>
 
         <TouchableOpacity
-          style={styles.dangerButton}
+          style={[styles.dangerButton, { backgroundColor: colors.danger }]}
           onPress={handleResetIdentityPrompt}
           activeOpacity={0.8}
         >
@@ -146,25 +232,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Backend Server URL</Text>
-        <Text style={styles.sectionDescription}>
+      <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Backend Server URL</Text>
+        <Text style={[styles.sectionDescription, { color: colors.textMuted }]}>
           Configure the API endpoint for poll synchronization and vote verification.
         </Text>
 
         <View style={styles.inputContainer}>
           <TextInput
-            style={styles.urlInput}
+            style={[
+              styles.urlInput,
+              { backgroundColor: colors.inputBackground, borderColor: colors.border, color: colors.text },
+            ]}
             value={serverUrlInput}
             onChangeText={setServerUrlInput}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="default"
             placeholder="http://localhost:8001"
-            placeholderTextColor="#8E8E93"
+            placeholderTextColor={colors.textMuted}
           />
           <TouchableOpacity
-            style={styles.saveUrlButton}
+            style={[styles.saveUrlButton, { backgroundColor: colors.accent }]}
             onPress={handleSaveServerUrl}
             activeOpacity={0.7}
           >
@@ -173,14 +262,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
         </View>
 
         <View style={styles.serverStatusRow}>
-          <View style={styles.serverStatusIndicator} />
-          <Text style={styles.serverStatusText}>Rocket vote_server (:8001)</Text>
+          <View style={[styles.serverStatusIndicator, { backgroundColor: colors.success }]} />
+          <Text style={[styles.serverStatusText, { color: colors.textMuted }]}>Rocket vote_server (:8001)</Text>
         </View>
       </View>
 
       <View style={styles.aboutCard}>
-        <Text style={styles.aboutTitle}>SafeVote Mobile</Text>
-        <Text style={styles.aboutVersion}>Version 0.1.0 • E2E Verifiable Voting</Text>
+        <Text style={[styles.aboutTitle, { color: colors.textMuted }]}>SafeVote Mobile</Text>
+        <Text style={[styles.aboutVersion, { color: colors.textMuted }]}>Version 0.1.0 • E2E Verifiable Voting</Text>
       </View>
     </ScrollView>
   );
@@ -189,45 +278,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ model }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
   },
   scrollContent: {
     padding: 16,
     paddingBottom: 40,
   },
   messageBanner: {
-    backgroundColor: '#E8F8EE',
     borderLeftWidth: 4,
-    borderLeftColor: '#34C759',
     padding: 12,
     borderRadius: 8,
     marginBottom: 14,
   },
   messageText: {
-    color: '#248A3D',
     fontSize: 13,
     fontWeight: '500',
   },
   copyBanner: {
-    backgroundColor: '#EBF3FE',
     borderLeftWidth: 4,
-    borderLeftColor: '#007AFF',
     padding: 10,
     borderRadius: 8,
     marginBottom: 14,
   },
   copyBannerText: {
-    color: '#0051A8',
     fontSize: 13,
     fontWeight: '500',
   },
   sectionCard: {
-    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: 18,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -238,10 +318,8 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#1C1C1E',
   },
   statusBadge: {
-    backgroundColor: '#E8F8EE',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
@@ -249,100 +327,131 @@ const styles = StyleSheet.create({
   statusBadgeText: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#34C759',
     letterSpacing: 0.5,
   },
   sectionDescription: {
     fontSize: 13,
-    color: '#8E8E93',
     lineHeight: 18,
     marginBottom: 14,
   },
+  themeSegmentContainer: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 1,
+  },
+  themeSegmentButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  themeSegmentActive: {
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  themeSegmentText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  themeSegmentTextActive: {
+    fontWeight: '700',
+  },
   signatureBox: {
-    backgroundColor: '#F9F9FB',
     borderRadius: 8,
     padding: 12,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
-    minHeight: 44,
+    minHeight: 48,
     justifyContent: 'center',
+  },
+  signatureMasked: {
+    fontSize: 18,
+    letterSpacing: 3,
   },
   signatureText: {
     fontFamily: 'monospace',
-    fontSize: 13,
-    color: '#007AFF',
+    fontSize: 12,
     letterSpacing: 0.5,
   },
   buttonRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 12,
+    marginTop: 4,
+  },
+  buttonIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   outlineButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#007AFF',
+    minHeight: 48,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   outlineButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#007AFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   primaryButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
+    minHeight: 48,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   primaryButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: '#FFFFFF',
   },
   dangerButton: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 12,
-    borderRadius: 10,
+    minHeight: 52,
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   dangerButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
-    gap: 8,
+    gap: 10,
   },
   urlInput: {
     flex: 1,
-    height: 42,
-    backgroundColor: '#F9F9FB',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    paddingHorizontal: 12,
-    fontSize: 14,
-    color: '#1C1C1E',
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    paddingHorizontal: 14,
+    fontSize: 15,
   },
   saveUrlButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    height: 42,
-    borderRadius: 8,
+    paddingHorizontal: 22,
+    height: 48,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },
   saveUrlButtonText: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
   },
   serverStatusRow: {
     flexDirection: 'row',
@@ -353,12 +462,10 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#34C759',
     marginRight: 6,
   },
   serverStatusText: {
     fontSize: 12,
-    color: '#8E8E93',
   },
   aboutCard: {
     alignItems: 'center',
@@ -367,11 +474,9 @@ const styles = StyleSheet.create({
   aboutTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8E8E93',
   },
   aboutVersion: {
     fontSize: 12,
-    color: '#C7C7CC',
     marginTop: 2,
   },
 });

@@ -9,13 +9,23 @@ const mockComponent = (name: string) => {
 
 export const View = mockComponent('View');
 export const Text = mockComponent('Text');
+export const Image = mockComponent('Image');
 export const TouchableOpacity = mockComponent('TouchableOpacity');
 export const TextInput = mockComponent('TextInput');
 export const ScrollView = mockComponent('ScrollView');
 export const RefreshControl = mockComponent('RefreshControl');
 export const ActivityIndicator = mockComponent('ActivityIndicator');
 export const SafeAreaView = mockComponent('SafeAreaView');
-export const StatusBar = mockComponent('StatusBar');
+export const StatusBar = Object.assign(mockComponent('StatusBar'), {
+  currentHeight: 24,
+});
+
+export const Platform = {
+  OS: 'ios',
+  select: <T>(specifics: { ios?: T; android?: T; default?: T }): T => {
+    return (specifics as any)[Platform.OS] ?? specifics.default;
+  },
+};
 
 export const FlatList = (props: any) => {
   const items = props.data || [];
@@ -41,3 +51,25 @@ export const Alert = {
 export const StyleSheet = {
   create: <T extends Record<string, any>>(styles: T): T => styles,
 };
+
+let currentColorScheme: 'light' | 'dark' = 'light';
+const listeners = new Set<(pref: { colorScheme?: 'light' | 'dark' }) => void>();
+
+export const Appearance = {
+  getColorScheme: () => currentColorScheme,
+  setColorScheme: (scheme: 'light' | 'dark') => {
+    currentColorScheme = scheme;
+    for (const listener of listeners) {
+      listener({ colorScheme: scheme });
+    }
+  },
+  addChangeListener: (listener: (pref: { colorScheme?: 'light' | 'dark' }) => void) => {
+    listeners.add(listener);
+    return {
+      remove: () => listeners.delete(listener),
+    };
+  },
+};
+
+export const useColorScheme = () => currentColorScheme;
+

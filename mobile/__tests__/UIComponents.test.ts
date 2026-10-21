@@ -12,6 +12,9 @@ import { AppNavigator } from '../src/navigation/AppNavigator';
 import { App, DefaultMemoryStorage, DefaultHttpTransport } from '../src/App';
 import { StorageProvider } from '../src/services/IdentityService';
 import { HttpTransport } from '../src/services/SafeVoteApiClient';
+import { Icon, IconName } from '../src/ui/components/Icon';
+import { ThemeProvider, useTheme, lightTheme, darkTheme } from '../src/ui/theme/ThemeContext';
+import { PollFilterDropdown, filterPollOptions } from '../src/ui/components/PollFilterDropdown';
 
 class MockStorage implements StorageProvider {
   private data = new Map<string, string>();
@@ -115,4 +118,183 @@ describe('UI Presentation Layer Integration', () => {
       global.fetch = originalFetch;
     }
   });
+
+  test('Icon renders elements across all supported icon variants without emoji dependencies', () => {
+    const iconNames: IconName[] = [
+      'poll',
+      'history',
+      'history-base',
+      'history-smooth',
+      'history-soft',
+      'history-heavy',
+      'history-arrow',
+      'history-filled',
+      'history-original',
+      'history-cutout',
+      'history-baked',
+      'history-bold',
+      'history-row',
+      'settings',
+      'search',
+      'chevron-down',
+      'chevron-up',
+      'check',
+      'eye',
+      'eye-off',
+      'info',
+      'copy',
+      'close',
+      'badge-winner',
+      'theme-system',
+      'theme-dark',
+      'theme-light',
+      'refresh',
+      'server',
+      'shield',
+      'palette',
+    ];
+
+    for (const name of iconNames) {
+      const element = React.createElement(Icon, { name, size: 24, color: '#007AFF' });
+      expect(element).toBeDefined();
+      expect(element.props.name).toBe(name);
+
+      const rendered = Icon({ name, size: 20, color: '#000000' }) as any;
+      expect(rendered).toBeDefined();
+      expect(rendered.props.style).toMatchObject({ width: 20, height: 20 });
+    }
+  });
+
+  test('filterPollOptions filters options by query across pollName and pollId, handling case and empty queries', () => {
+    const options = [
+      { pollId: 'p-presidential', pollName: 'Presidential 2026', status: 'open' },
+      { pollId: 'p-council', pollName: 'Local City Council', status: 'closed' },
+      { pollId: 'p-school', pollName: 'School Board Initiative', status: 'open' },
+    ];
+
+    expect(filterPollOptions(options, '')).toHaveLength(3);
+    expect(filterPollOptions(options, '   ')).toHaveLength(3);
+
+    const nameMatch = filterPollOptions(options, 'presidential');
+    expect(nameMatch).toHaveLength(1);
+    expect(nameMatch[0].pollId).toBe('p-presidential');
+
+    const partialMatch = filterPollOptions(options, 'council');
+    expect(partialMatch).toHaveLength(1);
+    expect(partialMatch[0].pollId).toBe('p-council');
+
+    const idMatch = filterPollOptions(options, 'p-school');
+    expect(idMatch).toHaveLength(1);
+    expect(idMatch[0].pollName).toBe('School Board Initiative');
+
+    const noMatch = filterPollOptions(options, 'non-existent-query');
+    expect(noMatch).toHaveLength(0);
+  });
+
+  test('PollFilterDropdown instantiates and handles multi-select and filter actions', () => {
+    const onToggle = jest.fn();
+    const onClearFilters = jest.fn();
+    const onSelectAll = jest.fn();
+
+    const options = [
+      { pollId: 'p-1', pollName: 'Presidential 2026', status: 'open' },
+      { pollId: 'p-2', pollName: 'Local Council', status: 'closed' },
+    ];
+
+    const element = React.createElement(PollFilterDropdown, {
+      options,
+      selectedPollIds: ['p-1', 'p-2'],
+      onTogglePoll: onToggle,
+      onClearFilters: onClearFilters,
+      onSelectAll: onSelectAll,
+    });
+
+    expect(element).toBeDefined();
+    expect(element.props.options).toHaveLength(2);
+    expect(element.props.selectedPollIds).toEqual(['p-1', 'p-2']);
+
+    element.props.onTogglePoll('p-2');
+    expect(onToggle).toHaveBeenCalledWith('p-2');
+
+    element.props.onSelectAll();
+    expect(onSelectAll).toHaveBeenCalledTimes(1);
+
+    element.props.onClearFilters();
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+  });
+
+  test('ThemeProvider and ThemeContext default to system mode and provide theme tokens', () => {
+    const requiredKeys = [
+      'background',
+      'card',
+      'cardSecondary',
+      'text',
+      'textMuted',
+      'border',
+      'accent',
+      'accentLight',
+      'success',
+      'successLight',
+      'danger',
+      'dangerLight',
+      'warning',
+      'inputBackground',
+      'divider',
+      'tabBarBackground',
+      'tabBarBorder',
+      'statusBar',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(lightTheme).toHaveProperty(key);
+      expect(darkTheme).toHaveProperty(key);
+    }
+
+    expect(lightTheme.background).toBe('#F2F2F7');
+    expect(darkTheme.background).toBe('#0D1117');
+    expect(lightTheme.statusBar).toBe('dark-content');
+    expect(darkTheme.statusBar).toBe('light-content');
+
+    const providerElement = React.createElement(ThemeProvider, {
+      children: React.createElement('View', null),
+    });
+    expect(providerElement).toBeDefined();
+  });
+
+  test('SettingsScreenModel handles signature loading, signature masking, theme settings, and identity reset', async () => {
+    const storage = new MockStorage();
+    const model = new SettingsScreenModel(controller);
+
+    expect(model.getMaskedSignature()).toBe('••••••••••••••••••••••••••••••••');
+
+    const stateChanges: any[] = [];
+    const unsubscribe = model.subscribe((st) => stateChanges.push(st));
+
+    await model.load();
+    const stateAfterLoad = model.getState();
+    expect(stateAfterLoad.voterSignature).toBeTruthy();
+    expect(stateAfterLoad.themeMode).toBe('system');
+    expect(stateChanges.length).toBeGreaterThan(0);
+
+    await model.setThemeMode('dark');
+    expect(model.getState().themeMode).toBe('dark');
+    expect(await controller.getStorage().getItem('safevote_theme_preference')).toBe('dark');
+
+    await model.setThemeMode('light');
+    expect(model.getState().themeMode).toBe('light');
+    expect(await controller.getStorage().getItem('safevote_theme_preference')).toBe('light');
+
+    await model.setThemeMode('system');
+    expect(model.getState().themeMode).toBe('system');
+
+    const previousSignature = model.getState().voterSignature;
+    await model.resetIdentity();
+    const stateAfterReset = model.getState();
+    expect(stateAfterReset.voterSignature).toBeTruthy();
+    expect(stateAfterReset.voterSignature).not.toBe(previousSignature);
+    expect(stateAfterReset.message).toBe('Anonymous voter signature reset successfully');
+
+    unsubscribe();
+  });
 });
+

@@ -50,6 +50,8 @@ describe('VoteHistoryService Seam', () => {
       signature: 'test-voter-sig',
       choice_uuid: 'choice-winner',
       poll_uuid: 'poll-closed-1',
+      poll_name: 'Presidential Election 2026',
+      choice_name: 'Candidate Alice',
       timestamp: '2026-02-10T14:30:00Z',
       poll_status: 'closed',
       is_winning_choice: true,
@@ -59,6 +61,8 @@ describe('VoteHistoryService Seam', () => {
       signature: 'test-voter-sig',
       choice_uuid: 'choice-loser',
       poll_uuid: 'poll-closed-2',
+      poll_name: 'City Council 2026',
+      choice_name: 'Candidate Bob',
       timestamp: '2026-02-15T09:00:00Z',
       poll_status: 'closed',
       is_winning_choice: false,
@@ -68,6 +72,8 @@ describe('VoteHistoryService Seam', () => {
       signature: 'test-voter-sig',
       choice_uuid: 'choice-active',
       poll_uuid: 'poll-open-3',
+      poll_name: 'Community Initiative Poll',
+      choice_name: 'Option Yes',
       timestamp: '2026-03-01T18:00:00Z',
       poll_status: 'open',
       is_winning_choice: null,
@@ -97,6 +103,8 @@ describe('VoteHistoryService Seam', () => {
 
       expect(history).toHaveLength(3);
       expect(history[0].poll_uuid).toBe('poll-closed-1');
+      expect(history[0].poll_name).toBe('Presidential Election 2026');
+      expect(history[0].choice_name).toBe('Candidate Alice');
       expect(history[0].is_winning_choice).toBe(true);
       expect(history[2].poll_status).toBe('open');
       expect(history[2].is_winning_choice).toBeNull();

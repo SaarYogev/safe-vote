@@ -133,6 +133,8 @@ pub struct VoteHistoryItem {
     pub signature: String,
     pub choice_uuid: Uuid,
     pub poll_uuid: Uuid,
+    pub poll_name: String,
+    pub choice_name: String,
     pub timestamp: String,
     pub poll_status: String,
     pub is_winning_choice: Option<bool>,

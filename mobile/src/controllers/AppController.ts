@@ -17,6 +17,7 @@ export interface AppConfig {
 }
 
 export class AppController {
+  public storage: StorageProvider;
   public identityService: IdentityService;
   public apiClient: SafeVoteApiClient;
   public pollsFilterService: PollsFilterService;
@@ -24,11 +25,16 @@ export class AppController {
   public voteHistoryService: VoteHistoryService;
 
   constructor(config: AppConfig) {
+    this.storage = config.storage;
     this.identityService = new IdentityService(config.storage);
     this.apiClient = new SafeVoteApiClient(config.baseUrl, config.transport);
     this.pollsFilterService = new PollsFilterService();
     this.votingService = new VotingService(this.identityService, this.apiClient);
     this.voteHistoryService = new VoteHistoryService(this.identityService, this.apiClient);
+  }
+
+  getStorage(): StorageProvider {
+    return this.storage;
   }
 
   async getVoterSignature(): Promise<string> {
