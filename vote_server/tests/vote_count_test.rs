@@ -5,10 +5,10 @@ use rocket::http::{ContentType, Status};
 use rocket::local::blocking::Client;
 use rocket::serde::json::serde_json;
 use uuid::Uuid;
-use vote_server::{compute_tracker_hash, get_connection, rocket_app};
+use vote_server::{compute_tracker_hash, get_connection, rocket_app, verify_ledger_chain};
 use vote_server::models::{
-    NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse, PollResultsResponse, PollTrackersResponse,
-    VoteCreationDetails, VoteHistoryItem,
+    LedgerAuditResponse, NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse,
+    PollResultsResponse, PollTrackersResponse, VoteCreationDetails, VoteHistoryItem,
 };
 use vote_server::schema::choices::dsl::choices;
 use vote_server::schema::polls::dsl::polls;
@@ -736,6 +736,168 @@ fn test_audit_trackers_invalid_and_not_found() {
     let not_found_res = client.get(format!("/audit/trackers/{}", Uuid::new_v4())).dispatch();
     assert_eq!(not_found_res.status(), Status::NotFound);
 }
+
+#[test]
+fn test_vote_ledger_monotonic_append_and_audit() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Ledger Monotonic Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice 1".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let payload_1 = VoteCreationDetails {
+        signature: format!("ledger_voter_1_{}", Uuid::new_v4()),
+        choice_uuid: choice_uuid.to_string(),
+        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt1")),
+    };
+    let cast_res_1 = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload_1).unwrap())
+        .dispatch();
+    assert_eq!(cast_res_1.status(), Status::Ok);
+
+    let payload_2 = VoteCreationDetails {
+        signature: format!("ledger_voter_2_{}", Uuid::new_v4()),
+        choice_uuid: choice_uuid.to_string(),
+        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt2")),
+    };
+    let cast_res_2 = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload_2).unwrap())
+        .dispatch();
+    assert_eq!(cast_res_2.status(), Status::Ok);
+
+    let audit_res = client
+        .get(format!("/audit/ledger/{}", poll_uuid))
+        .dispatch();
+    assert_eq!(audit_res.status(), Status::Ok);
+
+    let audit_data: LedgerAuditResponse = audit_res.into_json().expect("valid ledger audit");
+    assert_eq!(audit_data.poll_id, poll_uuid);
+    assert_eq!(audit_data.entries_count, 2);
+    assert!(audit_data.chain_valid);
+    assert!(audit_data.entries[1].sequence_number > audit_data.entries[0].sequence_number);
+    assert_eq!(audit_data.entries[1].prev_hash, audit_data.entries[0].entry_hash);
+    assert_eq!(audit_data.head_hash, Some(audit_data.entries[1].entry_hash.clone()));
+}
+
+#[test]
+fn test_vote_ledger_immutability_trigger_blocks_update_and_delete() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Ledger Immutable Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice Immutability".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    let payload = VoteCreationDetails {
+        signature: format!("immutable_voter_{}", Uuid::new_v4()),
+        choice_uuid: choice_uuid.to_string(),
+        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt_imm")),
+    };
+    let cast_res = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload).unwrap())
+        .dispatch();
+    assert_eq!(cast_res.status(), Status::Ok);
+
+    let update_result = diesel::sql_query("UPDATE vote_ledger SET voter_signature = 'tampered' WHERE poll_uuid = $1")
+        .bind::<diesel::sql_types::Uuid, _>(poll_uuid)
+        .execute(&mut conn);
+    assert!(update_result.is_err(), "Direct SQL update must fail due to trigger");
+    let update_err = update_result.unwrap_err().to_string();
+    assert!(update_err.contains("vote_ledger is immutable"), "Error should mention immutability trigger");
+
+    let delete_result = diesel::sql_query("DELETE FROM vote_ledger WHERE poll_uuid = $1")
+        .bind::<diesel::sql_types::Uuid, _>(poll_uuid)
+        .execute(&mut conn);
+    assert!(delete_result.is_err(), "Direct SQL delete must fail due to trigger");
+    let delete_err = delete_result.unwrap_err().to_string();
+    assert!(delete_err.contains("vote_ledger is immutable"), "Error should mention immutability trigger");
+}
+
+#[test]
+fn test_vote_ledger_tamper_detection_breaks_chain() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Ledger Tamper Detection".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice Tamper".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+    for i in 0..3 {
+        let payload = VoteCreationDetails {
+            signature: format!("tamper_test_voter_{}_{}", i, Uuid::new_v4()),
+            choice_uuid: choice_uuid.to_string(),
+            tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), &format!("salt_{}", i))),
+        };
+        let res = client
+            .post(format!("/polls/{}/votes", poll_uuid))
+            .header(ContentType::JSON)
+            .body(serde_json::to_string(&payload).unwrap())
+            .dispatch();
+        assert_eq!(res.status(), Status::Ok);
+    }
+
+    let audit_res = client
+        .get(format!("/audit/ledger/{}", poll_uuid))
+        .dispatch();
+    assert_eq!(audit_res.status(), Status::Ok);
+
+    let audit_data: LedgerAuditResponse = audit_res.into_json().expect("valid ledger audit");
+    assert!(audit_data.chain_valid);
+
+    let genesis = "0".repeat(64);
+    let mut tampered_entries = audit_data.entries.clone();
+    tampered_entries[1].record_payload = "tampered_ballot_record".to_string();
+    assert!(!verify_ledger_chain(&tampered_entries, &genesis), "Tampering record_payload must break chain verification");
+
+    let mut tampered_prev = audit_data.entries.clone();
+    tampered_prev[2].prev_hash = "f".repeat(64);
+    assert!(!verify_ledger_chain(&tampered_prev, &genesis), "Tampering prev_hash must break chain verification");
+}
+
 
 
 
