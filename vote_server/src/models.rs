@@ -152,6 +152,46 @@ pub struct VoteHistoryItem {
     pub is_winning_choice: Option<bool>,
 }
 
+#[derive(Insertable, Identifiable, Queryable, Selectable, Serialize, Deserialize, Debug, Clone)]
+#[diesel(primary_key(sequence_number))]
+#[diesel(table_name = vote_ledger)]
+#[serde(crate = "rocket::serde")]
+pub struct VoteLedgerEntry {
+    pub sequence_number: i64,
+    pub poll_uuid: Uuid,
+    pub choice_uuid: Uuid,
+    pub voter_signature: String,
+    pub tracker_hash: String,
+    pub record_payload: String,
+    pub prev_hash: String,
+    pub entry_hash: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = vote_ledger)]
+pub struct NewVoteLedgerEntry {
+    pub poll_uuid: Uuid,
+    pub choice_uuid: Uuid,
+    pub voter_signature: String,
+    pub tracker_hash: String,
+    pub record_payload: String,
+    pub prev_hash: String,
+    pub entry_hash: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(crate = "rocket::serde")]
+pub struct LedgerAuditResponse {
+    pub poll_id: Uuid,
+    pub head_sequence: Option<i64>,
+    pub head_hash: Option<String>,
+    pub prev_hash: Option<String>,
+    pub entries_count: usize,
+    pub chain_valid: bool,
+    pub entries: Vec<VoteLedgerEntry>,
+}
+
 #[derive(FromForm, Debug, Default)]
 pub struct VoteHistoryQuery {
     pub poll_id: Vec<String>,

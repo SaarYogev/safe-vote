@@ -21,6 +21,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    vote_ledger (sequence_number) {
+        sequence_number -> Int8,
+        poll_uuid -> Uuid,
+        choice_uuid -> Uuid,
+        voter_signature -> Varchar,
+        tracker_hash -> Varchar,
+        record_payload -> Text,
+        prev_hash -> Varchar,
+        entry_hash -> Varchar,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     votes (uuid) {
         uuid -> Uuid,
         signature -> Varchar,
@@ -30,10 +44,13 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(vote_ledger -> choices (choice_uuid));
+diesel::joinable!(vote_ledger -> polls (poll_uuid));
 diesel::joinable!(votes -> choices (choice_uuid));
 
 diesel::allow_tables_to_appear_in_same_query!(
     choices,
     polls,
+    vote_ledger,
     votes,
 );

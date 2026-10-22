@@ -15,11 +15,13 @@ use rocket::serde::json::Json;
 use uuid::Uuid;
 
 use crate::models::{
-    Choice, ChoiceCreationDetails, NewChoice, NewPoll, NewVote, Poll, PollCreationDetails,
-    PollResultsResponse, Vote, VoteCreationDetails, VoteHistoryItem, VoteHistoryQuery,
+    Choice, ChoiceCreationDetails, LedgerAuditResponse, NewChoice, NewPoll, NewVote,
+    NewVoteLedgerEntry, Poll, PollCreationDetails, PollResultsResponse, Vote, VoteCreationDetails,
+    VoteHistoryItem, VoteHistoryQuery, VoteLedgerEntry,
 };
 use crate::schema::choices::dsl::choices;
 use crate::schema::polls::dsl::polls;
+use crate::schema::vote_ledger::dsl::vote_ledger;
 use crate::schema::votes::dsl::votes;
 
 pub mod schema;
@@ -171,15 +173,54 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
         uuid: Uuid::new_v4(),
         signature: vote_details.signature.clone(),
         choice_uuid: choice_id,
-        tracker_hash: Some(tracker_hash),
+        tracker_hash: Some(tracker_hash.clone()),
     };
 
-    let vote_query_result = insert_into(votes).values(&new_vote).execute(&mut conn);
+    insert_into(votes)
+        .values(&new_vote)
+        .execute(&mut conn)
+        .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
 
-    match vote_query_result {
-        Ok(_) => Ok(format!("Casting a vote with the signature {}, for choice {}", &new_vote.signature, &new_vote.choice_uuid)),
-        Err(error) => panic!("{}", error),
-    }
+    let latest_entry: Option<(i64, String)> = vote_ledger
+        .filter(crate::schema::vote_ledger::poll_uuid.eq(choice.poll_uuid))
+        .order(crate::schema::vote_ledger::sequence_number.desc())
+        .select((crate::schema::vote_ledger::sequence_number, crate::schema::vote_ledger::entry_hash))
+        .first::<(i64, String)>(&mut conn)
+        .optional()
+        .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
+
+    let prev_hash = match latest_entry {
+        Some((_, h)) => h,
+        None => "0".repeat(64),
+    };
+
+    let record_payload = format!(
+        "{}:{}:{}:{}",
+        choice.poll_uuid, choice_id, vote_details.signature, tracker_hash
+    );
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(prev_hash.as_bytes());
+    hasher.update(record_payload.as_bytes());
+    let entry_hash = hex::encode(hasher.finalize());
+
+    let new_ledger_entry = NewVoteLedgerEntry {
+        poll_uuid: choice.poll_uuid,
+        choice_uuid: choice_id,
+        voter_signature: vote_details.signature.clone(),
+        tracker_hash,
+        record_payload,
+        prev_hash,
+        entry_hash,
+    };
+
+    insert_into(vote_ledger)
+        .values(&new_ledger_entry)
+        .execute(&mut conn)
+        .map_err(|e| Custom(Status::InternalServerError, e.to_string()))?;
+
+    Ok(format!("Casting a vote with the signature {}, for choice {}", &new_vote.signature, &new_vote.choice_uuid))
 }
 
 pub fn compute_poll_results(
@@ -538,6 +579,68 @@ pub async fn get_poll_trackers(
     }))
 }
 
+pub fn verify_ledger_chain(entries: &[VoteLedgerEntry], expected_genesis: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let mut expected_prev = expected_genesis.to_string();
+    for entry in entries {
+        if entry.prev_hash != expected_prev {
+            return false;
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(entry.prev_hash.as_bytes());
+        hasher.update(entry.record_payload.as_bytes());
+        let computed_hash = hex::encode(hasher.finalize());
+        if entry.entry_hash != computed_hash {
+            return false;
+        }
+        expected_prev = entry.entry_hash.clone();
+    }
+    true
+}
+
+#[get("/audit/ledger/<poll_id>")]
+pub async fn get_ledger_audit(
+    poll_id: &str,
+) -> Result<Json<LedgerAuditResponse>, Status> {
+    let parsed_poll_uuid = Uuid::parse_str(poll_id).map_err(|_| Status::BadRequest)?;
+    let mut conn = get_connection();
+
+    let target_poll: Option<Poll> = schema::polls::table
+        .filter(schema::polls::uuid.eq(parsed_poll_uuid))
+        .first::<Poll>(&mut conn)
+        .optional()
+        .map_err(|_| Status::InternalServerError)?;
+
+    if target_poll.is_none() {
+        return Err(Status::NotFound);
+    }
+
+    let entries: Vec<VoteLedgerEntry> = schema::vote_ledger::table
+        .filter(schema::vote_ledger::poll_uuid.eq(parsed_poll_uuid))
+        .order(schema::vote_ledger::sequence_number.asc())
+        .load::<VoteLedgerEntry>(&mut conn)
+        .map_err(|_| Status::InternalServerError)?;
+
+    let entries_count = entries.len();
+    let head_entry = entries.last();
+    let head_sequence = head_entry.map(|e| e.sequence_number);
+    let head_hash = head_entry.map(|e| e.entry_hash.clone());
+    let prev_hash = head_entry.map(|e| e.prev_hash.clone());
+
+    let genesis = "0".repeat(64);
+    let chain_valid = verify_ledger_chain(&entries, &genesis);
+
+    Ok(Json(LedgerAuditResponse {
+        poll_id: parsed_poll_uuid,
+        head_sequence,
+        head_hash,
+        prev_hash,
+        entries_count,
+        chain_valid,
+        entries,
+    }))
+}
+
 pub fn get_connection() -> PgConnection {
     let database_url = env::var("DATABASE_URL").unwrap();
     PgConnection::establish(&database_url)
@@ -561,6 +664,7 @@ pub fn rocket_app() -> rocket::Rocket<rocket::Build> {
             get_poll_user_vote,
             get_user_vote_history,
             get_poll_trackers,
+            get_ledger_audit,
         ],
     )
 }
