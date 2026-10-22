@@ -3,6 +3,7 @@ import {
   PollResultsResponse,
   VoteResponse,
   VoteHistoryItem,
+  VoteCreationPayload,
 } from '../types';
 
 export interface HttpTransport {
@@ -23,11 +24,31 @@ export class SafeVoteApiClient {
     return this.transport.request<PollDetailsResponse>('GET', `${this.baseUrl}/polls/${pollId}`);
   }
 
-  async castVote(pollId: string, choiceUuid: string, signature: string): Promise<string> {
-    return this.transport.request<string>('POST', `${this.baseUrl}/polls/${pollId}/votes`, {
+  async castVote(
+    pollId: string,
+    choiceUuid: string,
+    signature: string,
+    options?: {
+      publicKey?: string;
+      timestamp?: number;
+      nonce?: string;
+      trackerHash?: string;
+    }
+  ): Promise<string> {
+    const payload: VoteCreationPayload = {
       signature,
       choice_uuid: choiceUuid,
-    });
+      ...(options?.publicKey ? { public_key: options.publicKey } : {}),
+      ...(options?.timestamp !== undefined ? { timestamp: options.timestamp } : {}),
+      ...(options?.nonce ? { nonce: options.nonce } : {}),
+      ...(options?.trackerHash ? { tracker_hash: options.trackerHash } : {}),
+    };
+
+    return this.transport.request<string>(
+      'POST',
+      `${this.baseUrl}/polls/${pollId}/votes`,
+      payload
+    );
   }
 
   async getPollResults(pollId: string): Promise<PollResultsResponse> {

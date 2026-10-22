@@ -64,4 +64,77 @@ describe('IdentityService Seam', () => {
     const secondSig = await identityService.getOrCreateVoterSignature();
     expect(secondSig).not.toBe(firstSig);
   });
+
+  describe('Secure Enclave & Strict Biometric Enforcement', () => {
+    it('generates hardware-backed cryptographic keypair on biometric capable device', async () => {
+      const hardwareProvider = {
+        isBiometricsSupported: jest.fn().mockResolvedValue(true),
+        hasHardwareSecurity: jest.fn().mockResolvedValue(true),
+        generateHardwareKeyPair: jest.fn().mockResolvedValue({
+          publicKey: 'a'.repeat(64),
+          keyTag: 'safe_vote_enclave_key',
+        }),
+        signWithBiometrics: jest.fn().mockResolvedValue('b'.repeat(128)),
+      };
+
+      const enclaveService = new IdentityService(storage, hardwareProvider);
+      const publicKey = await enclaveService.getOrCreateHardwarePublicKey();
+
+      expect(publicKey).toBe('a'.repeat(64));
+      expect(hardwareProvider.generateHardwareKeyPair).toHaveBeenCalledWith(
+        expect.objectContaining({
+          keyTag: 'safe_vote_enclave_key',
+          accessControl: expect.objectContaining({
+            biometryCurrentSetOnly: true,
+            disableDeviceFallback: true,
+          }),
+        })
+      );
+    });
+
+    it('blocks device passcode/PIN fallback and fails if biometrics are cancelled or not matched', async () => {
+      const hardwareProvider = {
+        isBiometricsSupported: jest.fn().mockResolvedValue(true),
+        hasHardwareSecurity: jest.fn().mockResolvedValue(true),
+        generateHardwareKeyPair: jest.fn().mockResolvedValue({
+          publicKey: 'a'.repeat(64),
+          keyTag: 'safe_vote_enclave_key',
+        }),
+        signWithBiometrics: jest.fn().mockRejectedValue(new Error('Biometric authentication failed: Device passcode fallback blocked')),
+      };
+
+      const enclaveService = new IdentityService(storage, hardwareProvider);
+      await expect(
+        enclaveService.signVoteBallot({
+          pollUuid: 'poll-1',
+          choiceUuid: 'choice-1',
+          timestamp: 1700000000,
+          nonce: 'test_nonce',
+        })
+      ).rejects.toThrow('Device passcode fallback blocked');
+    });
+
+    it('rejects signing when biometric enrollment template is modified after key generation', async () => {
+      const hardwareProvider = {
+        isBiometricsSupported: jest.fn().mockResolvedValue(true),
+        hasHardwareSecurity: jest.fn().mockResolvedValue(true),
+        generateHardwareKeyPair: jest.fn().mockResolvedValue({
+          publicKey: 'a'.repeat(64),
+          keyTag: 'safe_vote_enclave_key',
+        }),
+        signWithBiometrics: jest.fn().mockRejectedValue(new Error('Key permanently invalidated: Biometric database modified (kSecAccessControlBiometryCurrentSet)')),
+      };
+
+      const enclaveService = new IdentityService(storage, hardwareProvider);
+      await expect(
+        enclaveService.signVoteBallot({
+          pollUuid: 'poll-1',
+          choiceUuid: 'choice-1',
+          timestamp: 1700000000,
+          nonce: 'test_nonce',
+        })
+      ).rejects.toThrow('Key permanently invalidated');
+    });
+  });
 });
+
