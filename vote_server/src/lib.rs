@@ -21,6 +21,7 @@ use crate::models::{
 };
 use crate::schema::choices::dsl::choices;
 use crate::schema::polls::dsl::polls;
+use crate::schema::replay_nonces::dsl::replay_nonces;
 use crate::schema::vote_ledger::dsl::vote_ledger;
 use crate::schema::votes::dsl::votes;
 
@@ -131,6 +132,89 @@ pub async fn cast_vote_nested(_poll_id: &str, vote_details: Json<VoteCreationDet
     cast_vote_handler(vote_details).await
 }
 
+pub fn canonical_vote_payload(
+    poll_id: &Uuid,
+    choice_id: &Uuid,
+    timestamp: i64,
+    nonce: &str,
+) -> String {
+    format!(
+        "{{\"choice_id\":\"{}\",\"nonce\":\"{}\",\"poll_id\":\"{}\",\"timestamp\":{}}}",
+        choice_id, nonce, poll_id, timestamp
+    )
+}
+
+pub fn verify_ed25519_signature(
+    public_key_hex: &str,
+    signature_hex: &str,
+    canonical_payload: &str,
+) -> Result<(), String> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+    let pk_bytes = hex::decode(public_key_hex)
+        .map_err(|e| format!("Invalid public key hex encoding: {}", e))?;
+    let pk_array: [u8; 32] = pk_bytes
+        .try_into()
+        .map_err(|_| "Public key must be exactly 32 bytes".to_string())?;
+
+    let verifying_key = VerifyingKey::from_bytes(&pk_array)
+        .map_err(|e| format!("Invalid Ed25519 public key: {}", e))?;
+
+    let sig_bytes = hex::decode(signature_hex)
+        .map_err(|e| format!("Invalid signature hex encoding: {}", e))?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| "Signature must be exactly 64 bytes".to_string())?;
+
+    let sig = Signature::from_bytes(&sig_array);
+
+    verifying_key
+        .verify(canonical_payload.as_bytes(), &sig)
+        .map_err(|e| format!("Signature verification failed: {}", e))
+}
+
+pub const NONCE_EXPIRATION_WINDOW_SECS: i64 = 300;
+
+pub fn verify_and_record_nonce(
+    conn: &mut PgConnection,
+    public_key_hex: &str,
+    nonce: &str,
+    timestamp: i64,
+) -> Result<(), Custom<String>> {
+    let current_time = Utc::now().timestamp();
+    if (current_time - timestamp).abs() > NONCE_EXPIRATION_WINDOW_SECS {
+        return Err(Custom(
+            Status::BadRequest,
+            format!(
+                "Timestamp {} is outside the allowed anti-replay window of {} seconds (current: {})",
+                timestamp, NONCE_EXPIRATION_WINDOW_SECS, current_time
+            ),
+        ));
+    }
+
+    let new_nonce = crate::models::NewReplayNonce {
+        nonce: nonce.to_string(),
+        public_key: public_key_hex.to_string(),
+        timestamp,
+    };
+
+    diesel::insert_into(replay_nonces)
+        .values(&new_nonce)
+        .execute(conn)
+        .map_err(|e| match e {
+            diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _,
+            ) => Custom(
+                Status::BadRequest,
+                "Nonce has already been used (replay detected)".to_string(),
+            ),
+            other => Custom(Status::InternalServerError, other.to_string()),
+        })?;
+
+    Ok(())
+}
+
 async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<String, Custom<String>> {
     let choice_id: Uuid = match vote_details.choice_uuid.parse() {
         Ok(id) => id,
@@ -165,13 +249,48 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
         return Err(Custom(Status::Forbidden, "Poll is closed. Votes are no longer accepted.".to_string()));
     }
 
+    let voter_pk: String = match &vote_details.public_key {
+        Some(pk) => pk.clone(),
+        None => {
+            return Err(Custom(
+                Status::BadRequest,
+                "Unsigned vote submission: public_key, timestamp, and nonce are required".to_string(),
+            ))
+        }
+    };
+    let vote_timestamp: i64 = match vote_details.timestamp {
+        Some(ts) => ts,
+        None => {
+            return Err(Custom(
+                Status::BadRequest,
+                "Unsigned vote submission: public_key, timestamp, and nonce are required".to_string(),
+            ))
+        }
+    };
+    let vote_nonce: String = match &vote_details.nonce {
+        Some(n) => n.clone(),
+        None => {
+            return Err(Custom(
+                Status::BadRequest,
+                "Unsigned vote submission: public_key, timestamp, and nonce are required".to_string(),
+            ))
+        }
+    };
+
+    let canonical_payload = canonical_vote_payload(&poll.uuid, &choice_id, vote_timestamp, &vote_nonce);
+
+    verify_ed25519_signature(&voter_pk, &vote_details.signature, &canonical_payload)
+        .map_err(|e| Custom(Status::BadRequest, format!("Invalid cryptographic signature: {}", e)))?;
+
+    verify_and_record_nonce(&mut conn, &voter_pk, &vote_nonce, vote_timestamp)?;
+
     let tracker_hash = vote_details.tracker_hash.clone().unwrap_or_else(|| {
         compute_tracker_hash(&choice_id.to_string(), &Uuid::new_v4().to_string())
     });
 
     let new_vote = NewVote {
         uuid: Uuid::new_v4(),
-        signature: vote_details.signature.clone(),
+        signature: voter_pk.clone(),
         choice_uuid: choice_id,
         tracker_hash: Some(tracker_hash.clone()),
     };
@@ -195,8 +314,8 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
     };
 
     let record_payload = format!(
-        "{}:{}:{}:{}",
-        choice.poll_uuid, choice_id, vote_details.signature, tracker_hash
+        "{}:{}:{}:{}:{}",
+        choice.poll_uuid, choice_id, voter_pk, vote_nonce, tracker_hash
     );
 
     use sha2::{Digest, Sha256};
@@ -208,7 +327,7 @@ async fn cast_vote_handler(vote_details: Json<VoteCreationDetails>) -> Result<St
     let new_ledger_entry = NewVoteLedgerEntry {
         poll_uuid: choice.poll_uuid,
         choice_uuid: choice_id,
-        voter_signature: vote_details.signature.clone(),
+        voter_signature: voter_pk.clone(),
         tracker_hash,
         record_payload,
         prev_hash,

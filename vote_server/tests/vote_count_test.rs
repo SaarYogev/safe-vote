@@ -5,7 +5,9 @@ use rocket::http::{ContentType, Status};
 use rocket::local::blocking::Client;
 use rocket::serde::json::serde_json;
 use uuid::Uuid;
-use vote_server::{compute_tracker_hash, get_connection, rocket_app, verify_ledger_chain};
+use vote_server::{
+    canonical_vote_payload, compute_tracker_hash, get_connection, rocket_app, verify_ledger_chain,
+};
 use vote_server::models::{
     LedgerAuditResponse, NewChoice, NewPoll, NewVote, Poll, PollDetailsResponse,
     PollResultsResponse, PollTrackersResponse, VoteCreationDetails, VoteHistoryItem,
@@ -13,6 +15,64 @@ use vote_server::models::{
 use vote_server::schema::choices::dsl::choices;
 use vote_server::schema::polls::dsl::polls;
 use vote_server::schema::votes::dsl::votes;
+
+fn create_test_signed_vote(
+    poll_id: Uuid,
+    choice_id: Uuid,
+    tracker_hash: Option<String>,
+) -> (VoteCreationDetails, String, ed25519_dalek::SigningKey) {
+    use ed25519_dalek::Signer;
+    let seed = Uuid::new_v4();
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[..16].copy_from_slice(seed.as_bytes());
+    seed_bytes[16..].copy_from_slice(seed.as_bytes());
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+    let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+    let timestamp = Utc::now().timestamp();
+    let nonce = Uuid::new_v4().to_string();
+
+    let canonical = canonical_vote_payload(&poll_id, &choice_id, timestamp, &nonce);
+    let sig = signing_key.sign(canonical.as_bytes());
+    let signature = hex::encode(sig.to_bytes());
+
+    (
+        VoteCreationDetails {
+            choice_uuid: choice_id.to_string(),
+            signature,
+            tracker_hash,
+            public_key: Some(public_key.clone()),
+            timestamp: Some(timestamp),
+            nonce: Some(nonce),
+        },
+        public_key,
+        signing_key,
+    )
+}
+
+fn create_test_signed_vote_with_key(
+    poll_id: Uuid,
+    choice_id: Uuid,
+    signing_key: &ed25519_dalek::SigningKey,
+    tracker_hash: Option<String>,
+) -> VoteCreationDetails {
+    use ed25519_dalek::Signer;
+    let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+    let timestamp = Utc::now().timestamp();
+    let nonce = Uuid::new_v4().to_string();
+
+    let canonical = canonical_vote_payload(&poll_id, &choice_id, timestamp, &nonce);
+    let sig = signing_key.sign(canonical.as_bytes());
+    let signature = hex::encode(sig.to_bytes());
+
+    VoteCreationDetails {
+        choice_uuid: choice_id.to_string(),
+        signature,
+        tracker_hash,
+        public_key: Some(public_key),
+        timestamp: Some(timestamp),
+        nonce: Some(nonce),
+    }
+}
 
 #[test]
 fn test_count_votes_empty_poll() {
@@ -275,46 +335,46 @@ fn test_get_latest_user_vote_for_poll() {
         .execute(&mut conn)
         .unwrap();
 
-    let voter_sig = format!("voter_{}", Uuid::new_v4());
+    let (payload_1, voter_pubkey, signing_key) = create_test_signed_vote(poll_uuid, choice_1, None);
 
     // Vote for Choice 1
     let vote_1_res = client
         .post("/vote")
         .header(ContentType::JSON)
-        .body(format!(r#"{{"signature":"{}","choice_uuid":"{}"}}"#, voter_sig, choice_1))
+        .body(serde_json::to_string(&payload_1).unwrap())
         .dispatch();
     assert_eq!(vote_1_res.status(), Status::Ok);
 
     // Initial check: voter's vote is Choice 1
     let query_1 = client
-        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_sig))
+        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_pubkey))
         .dispatch();
     assert_eq!(query_1.status(), Status::Ok);
     let vote_data_1: vote_server::models::VoteResponse =
         query_1.into_json().expect("valid json response");
     assert_eq!(vote_data_1.choice_uuid, choice_1);
-    assert_eq!(vote_data_1.signature, voter_sig);
+    assert_eq!(vote_data_1.signature, voter_pubkey);
     assert!(!vote_data_1.timestamp.is_empty());
 
     std::thread::sleep(std::time::Duration::from_millis(15));
 
-    // Re-vote for Choice 2
+    let payload_2 = create_test_signed_vote_with_key(poll_uuid, choice_2, &signing_key, None);
     let vote_2_res = client
         .post("/vote")
         .header(ContentType::JSON)
-        .body(format!(r#"{{"signature":"{}","choice_uuid":"{}"}}"#, voter_sig, choice_2))
+        .body(serde_json::to_string(&payload_2).unwrap())
         .dispatch();
     assert_eq!(vote_2_res.status(), Status::Ok);
 
     // Latest vote should now be Choice 2
     let query_2 = client
-        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_sig))
+        .get(format!("/polls/{}/votes/{}", poll_uuid, voter_pubkey))
         .dispatch();
     assert_eq!(query_2.status(), Status::Ok);
     let vote_data_2: vote_server::models::VoteResponse =
         query_2.into_json().expect("valid json response");
     assert_eq!(vote_data_2.choice_uuid, choice_2);
-    assert_eq!(vote_data_2.signature, voter_sig);
+    assert_eq!(vote_data_2.signature, voter_pubkey);
 }
 
 #[test]
@@ -687,11 +747,7 @@ fn test_cast_vote_with_tracker_hash_and_audit_trackers() {
 
     let client_salt_1 = "salt_voter_alpha";
     let tracker_1 = compute_tracker_hash(&choice_uuid.to_string(), client_salt_1);
-    let vote_payload_1 = VoteCreationDetails {
-        signature: "sig_voter_alpha_999".to_string(),
-        choice_uuid: choice_uuid.to_string(),
-        tracker_hash: Some(tracker_1.clone()),
-    };
+    let (vote_payload_1, _, _) = create_test_signed_vote(poll_uuid, choice_uuid, Some(tracker_1.clone()));
     let cast_res_1 = client
         .post(format!("/polls/{}/votes", poll_uuid))
         .header(ContentType::JSON)
@@ -701,11 +757,7 @@ fn test_cast_vote_with_tracker_hash_and_audit_trackers() {
 
     let client_salt_2 = "salt_voter_beta";
     let tracker_2 = compute_tracker_hash(&choice_uuid.to_string(), client_salt_2);
-    let vote_payload_2 = VoteCreationDetails {
-        signature: "sig_voter_beta_888".to_string(),
-        choice_uuid: choice_uuid.to_string(),
-        tracker_hash: Some(tracker_2.clone()),
-    };
+    let (vote_payload_2, _, _) = create_test_signed_vote(poll_uuid, choice_uuid, Some(tracker_2.clone()));
     let cast_res_2 = client
         .post("/vote")
         .header(ContentType::JSON)
@@ -759,11 +811,11 @@ fn test_vote_ledger_monotonic_append_and_audit() {
 
     let client = Client::tracked(rocket_app()).expect("valid rocket instance");
 
-    let payload_1 = VoteCreationDetails {
-        signature: format!("ledger_voter_1_{}", Uuid::new_v4()),
-        choice_uuid: choice_uuid.to_string(),
-        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt1")),
-    };
+    let (payload_1, _, _) = create_test_signed_vote(
+        poll_uuid,
+        choice_uuid,
+        Some(compute_tracker_hash(&choice_uuid.to_string(), "salt1")),
+    );
     let cast_res_1 = client
         .post(format!("/polls/{}/votes", poll_uuid))
         .header(ContentType::JSON)
@@ -771,11 +823,11 @@ fn test_vote_ledger_monotonic_append_and_audit() {
         .dispatch();
     assert_eq!(cast_res_1.status(), Status::Ok);
 
-    let payload_2 = VoteCreationDetails {
-        signature: format!("ledger_voter_2_{}", Uuid::new_v4()),
-        choice_uuid: choice_uuid.to_string(),
-        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt2")),
-    };
+    let (payload_2, _, _) = create_test_signed_vote(
+        poll_uuid,
+        choice_uuid,
+        Some(compute_tracker_hash(&choice_uuid.to_string(), "salt2")),
+    );
     let cast_res_2 = client
         .post(format!("/polls/{}/votes", poll_uuid))
         .header(ContentType::JSON)
@@ -818,11 +870,11 @@ fn test_vote_ledger_immutability_trigger_blocks_update_and_delete() {
     insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
 
     let client = Client::tracked(rocket_app()).expect("valid rocket instance");
-    let payload = VoteCreationDetails {
-        signature: format!("immutable_voter_{}", Uuid::new_v4()),
-        choice_uuid: choice_uuid.to_string(),
-        tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), "salt_imm")),
-    };
+    let (payload, _, _) = create_test_signed_vote(
+        poll_uuid,
+        choice_uuid,
+        Some(compute_tracker_hash(&choice_uuid.to_string(), "salt_imm")),
+    );
     let cast_res = client
         .post(format!("/polls/{}/votes", poll_uuid))
         .header(ContentType::JSON)
@@ -867,11 +919,11 @@ fn test_vote_ledger_tamper_detection_breaks_chain() {
 
     let client = Client::tracked(rocket_app()).expect("valid rocket instance");
     for i in 0..3 {
-        let payload = VoteCreationDetails {
-            signature: format!("tamper_test_voter_{}_{}", i, Uuid::new_v4()),
-            choice_uuid: choice_uuid.to_string(),
-            tracker_hash: Some(compute_tracker_hash(&choice_uuid.to_string(), &format!("salt_{}", i))),
-        };
+        let (payload, _, _) = create_test_signed_vote(
+            poll_uuid,
+            choice_uuid,
+            Some(compute_tracker_hash(&choice_uuid.to_string(), &format!("salt_{}", i))),
+        );
         let res = client
             .post(format!("/polls/{}/votes", poll_uuid))
             .header(ContentType::JSON)
@@ -896,6 +948,187 @@ fn test_vote_ledger_tamper_detection_breaks_chain() {
     let mut tampered_prev = audit_data.entries.clone();
     tampered_prev[2].prev_hash = "f".repeat(64);
     assert!(!verify_ledger_chain(&tampered_prev, &genesis), "Tampering prev_hash must break chain verification");
+}
+
+#[test]
+fn test_unsigned_vote_payload_rejected_with_400() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Unsigned Test Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice Unsigned".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let unsigned_payload = VoteCreationDetails {
+        choice_uuid: choice_uuid.to_string(),
+        signature: "unsigned_dummy_signature".to_string(),
+        tracker_hash: None,
+        public_key: None,
+        timestamp: None,
+        nonce: None,
+    };
+    let res = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&unsigned_payload).unwrap())
+        .dispatch();
+    assert_eq!(res.status(), Status::BadRequest);
+}
+
+#[test]
+fn test_tampered_payload_or_invalid_signature_rejected() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Signature Verification Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_1 = Uuid::new_v4();
+    let choice_2 = Uuid::new_v4();
+    insert_into(choices)
+        .values(&vec![
+            NewChoice {
+                uuid: choice_1,
+                name: "Choice 1".to_string(),
+                poll_uuid,
+            },
+            NewChoice {
+                uuid: choice_2,
+                name: "Choice 2".to_string(),
+                poll_uuid,
+            },
+        ])
+        .execute(&mut conn)
+        .unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let (mut payload_corrupted, _, _) = create_test_signed_vote(poll_uuid, choice_1, None);
+    payload_corrupted.signature = "0".repeat(128);
+    let res_corrupted = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload_corrupted).unwrap())
+        .dispatch();
+    assert_eq!(res_corrupted.status(), Status::BadRequest);
+
+    let (mut payload_tampered, _, _) = create_test_signed_vote(poll_uuid, choice_1, None);
+    payload_tampered.choice_uuid = choice_2.to_string();
+    let res_tampered = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload_tampered).unwrap())
+        .dispatch();
+    assert_eq!(res_tampered.status(), Status::BadRequest);
+}
+
+#[test]
+fn test_anti_replay_nonce_duplicate_rejected() {
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Anti-Replay Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice Replay".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let (payload, _, _) = create_test_signed_vote(poll_uuid, choice_uuid, None);
+
+    let first_res = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload).unwrap())
+        .dispatch();
+    assert_eq!(first_res.status(), Status::Ok);
+
+    let replay_res = client
+        .post(format!("/polls/{}/votes", poll_uuid))
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&payload).unwrap())
+        .dispatch();
+    assert_eq!(replay_res.status(), Status::BadRequest);
+}
+
+#[test]
+fn test_expired_timestamp_outside_window_rejected() {
+    use ed25519_dalek::Signer;
+    let mut conn = get_connection();
+    let poll_uuid = Uuid::new_v4();
+    let new_poll = NewPoll {
+        uuid: poll_uuid,
+        name: "Timestamp Window Poll".to_string(),
+        start_date: Utc::now().to_string(),
+        close_date: "2099-12-31".to_string(),
+    };
+    insert_into(polls).values(&new_poll).execute(&mut conn).unwrap();
+
+    let choice_uuid = Uuid::new_v4();
+    let new_choice = NewChoice {
+        uuid: choice_uuid,
+        name: "Choice Window".to_string(),
+        poll_uuid,
+    };
+    insert_into(choices).values(&new_choice).execute(&mut conn).unwrap();
+
+    let client = Client::tracked(rocket_app()).expect("valid rocket instance");
+
+    let expired_timestamp = Utc::now().timestamp() - 350;
+    let seed = Uuid::new_v4();
+    let mut seed_bytes = [0u8; 32];
+    seed_bytes[..16].copy_from_slice(seed.as_bytes());
+    seed_bytes[16..].copy_from_slice(seed.as_bytes());
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
+    let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+    let nonce = Uuid::new_v4().to_string();
+
+    let canonical = canonical_vote_payload(&poll_uuid, &choice_uuid, expired_timestamp, &nonce);
+    let sig = signing_key.sign(canonical.as_bytes());
+    let signature = hex::encode(sig.to_bytes());
+
+    let expired_payload = VoteCreationDetails {
+        choice_uuid: choice_uuid.to_string(),
+        signature,
+        tracker_hash: None,
+        public_key: Some(public_key),
+        timestamp: Some(expired_timestamp),
+        nonce: Some(nonce),
+    };
+
+    let res = client
+        .post("/vote")
+        .header(ContentType::JSON)
+        .body(serde_json::to_string(&expired_payload).unwrap())
+        .dispatch();
+    assert_eq!(res.status(), Status::BadRequest);
 }
 
 

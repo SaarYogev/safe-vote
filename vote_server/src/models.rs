@@ -90,6 +90,27 @@ pub struct VoteCreationDetails {
     pub signature: String,
     pub choice_uuid: String,
     pub tracker_hash: Option<String>,
+    pub public_key: Option<String>,
+    pub timestamp: Option<i64>,
+    pub nonce: Option<String>,
+}
+
+#[derive(Insertable, Identifiable, Queryable, Selectable, Debug, Clone)]
+#[diesel(primary_key(nonce))]
+#[diesel(table_name = replay_nonces)]
+pub struct ReplayNonce {
+    pub nonce: String,
+    pub public_key: String,
+    pub timestamp: i64,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = replay_nonces)]
+pub struct NewReplayNonce {
+    pub nonce: String,
+    pub public_key: String,
+    pub timestamp: i64,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

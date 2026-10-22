@@ -21,6 +21,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    replay_nonces (nonce) {
+        nonce -> Varchar,
+        public_key -> Varchar,
+        timestamp -> Int8,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     vote_ledger (sequence_number) {
         sequence_number -> Int8,
         poll_uuid -> Uuid,
@@ -51,6 +60,7 @@ diesel::joinable!(votes -> choices (choice_uuid));
 diesel::allow_tables_to_appear_in_same_query!(
     choices,
     polls,
+    replay_nonces,
     vote_ledger,
     votes,
 );
