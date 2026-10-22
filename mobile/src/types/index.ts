@@ -20,6 +20,10 @@ export interface PollDetailsResponse {
 export interface VoteCreationPayload {
   signature: string;
   choice_uuid: string;
+  tracker_hash?: string;
+  public_key?: string;
+  timestamp?: number;
+  nonce?: string;
 }
 
 export interface PollResultsResponse {

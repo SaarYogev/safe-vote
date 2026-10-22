@@ -25,13 +25,26 @@ export class VotingService {
       throw new Error('Invalid choice for poll');
     }
 
-    const signature = await this.identityService.getOrCreateVoterSignature();
-    await this.apiClient.castVote(poll.uuid, choiceUuid, signature);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const nonce = 'n_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+
+    const signedBallot = await this.identityService.signVoteBallot({
+      pollUuid: poll.uuid,
+      choiceUuid,
+      timestamp,
+      nonce,
+    });
+
+    await this.apiClient.castVote(poll.uuid, choiceUuid, signedBallot.signature, {
+      publicKey: signedBallot.public_key,
+      timestamp: signedBallot.timestamp,
+      nonce: signedBallot.nonce,
+    });
 
     return {
       pollUuid: poll.uuid,
       choiceUuid,
-      signature,
+      signature: signedBallot.signature,
       timestamp: new Date().toISOString(),
     };
   }
