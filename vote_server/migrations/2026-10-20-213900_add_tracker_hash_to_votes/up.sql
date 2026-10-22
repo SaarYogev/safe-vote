@@ -1,0 +1,1 @@
+ALTER TABLE votes ADD COLUMN tracker_hash VARCHAR(256);
